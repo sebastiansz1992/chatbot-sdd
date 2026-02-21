@@ -1,0 +1,42 @@
+body {
+  @apply m-0 min-w-[320px] bg-slate-100 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body,
+header,
+aside,
+section,
+article,
+div,
+p,
+button,
+input {
+  @apply transition-colors duration-200 ease-in-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body,
+  header,
+  aside,
+  section,
+  article,
+  div,
+  p,
+  button,
+  input {
+    @apply transition-none;
+  }
+}
+
+button:focus-visible,
+input:focus-visible {
+  @apply outline outline-2 outline-offset-2 outline-blue-500 dark:outline-blue-400;
+}
+
+.chat-scroll {
+  scrollbar-width: thin;
+}
