@@ -19,12 +19,13 @@ function getInitialTheme(): Theme {
     return storedTheme
   }
 
-  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  return globalThis.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
 
 export default function App() {
   const { messages, draftMessage, setDraftMessage, canSend, sendMessage } = useChatState()
   const [theme, setTheme] = useState<Theme>(getInitialTheme)
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false)
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark')
@@ -35,19 +36,31 @@ export default function App() {
     setTheme((currentTheme) => (currentTheme === 'dark' ? 'light' : 'dark'))
   }
 
+  const toggleSidebar = () => {
+    setIsSidebarOpen((currentState) => !currentState)
+  }
+
+  const closeSidebar = () => {
+    setIsSidebarOpen(false)
+  }
+
   return (
     <AppShell
+      isSidebarOpen={isSidebarOpen}
+      onCloseSidebar={closeSidebar}
       topBar={
         <TopStatusBar
           encryptionLabel={sessionStatus.encryptionLabel}
           connectionLabel={sessionStatus.connectionLabel}
           theme={theme}
           onToggleTheme={toggleTheme}
+          onToggleSidebar={toggleSidebar}
+          isSidebarOpen={isSidebarOpen}
         />
       }
     >
       <ChatTimeline messages={messages} />
-      <div className="border-t border-slate-200 bg-slate-100 px-4 pt-4 dark:border-slate-800 dark:bg-slate-950">
+      <div className="border-t border-slate-200 bg-slate-100 px-3 pt-3 dark:border-slate-800 dark:bg-slate-950 sm:px-4 sm:pt-4">
         <ChatComposer
           value={draftMessage}
           onChange={setDraftMessage}
