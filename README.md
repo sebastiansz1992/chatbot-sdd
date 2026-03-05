@@ -13,6 +13,7 @@ El proyecto está enfocado en una experiencia de chat financiera moderna, con se
 - [Scripts disponibles](#scripts-disponibles)
 - [Arquitectura del proyecto](#arquitectura-del-proyecto)
 - [Flujo funcional actual](#flujo-funcional-actual)
+- [Integración con IA (TypeScript)](#integración-con-ia-typescript)
 - [Temas (Light/Dark)](#temas-lightdark)
 - [Iconografía de FiBot y agentes](#iconografía-de-fibot-y-agentes)
 - [Calidad y pruebas](#calidad-y-pruebas)
@@ -131,6 +132,43 @@ Estructura principal:
 3. La app valida que el input no esté vacío.
 4. El mensaje se agrega al timeline.
 5. Se mantiene visible el disclaimer financiero.
+
+## Integración con IA (TypeScript)
+
+El chat ya está integrado con un cliente TypeScript para consultar un proveedor de IA vía HTTP.
+
+### Cómo configurarlo
+
+1. Crea tu archivo local de entorno:
+
+	```bash
+	cp .env.example .env
+	```
+
+2. Define variables en `.env`:
+
+	- `VITE_AI_API_URL`: URL del endpoint de chat/completions.
+	- `VITE_AI_API_KEY`: token o API key.
+	- `VITE_AI_MODEL`: modelo a utilizar (opcional).
+	- `VITE_AI_AUTH_HEADER`: header de auth (opcional, por defecto `Authorization`).
+
+### Flujo al enviar mensaje
+
+- Se agrega inmediatamente el mensaje del usuario en la conversación.
+- Se envía el historial al endpoint configurado.
+- Se agrega la respuesta del asistente al timeline.
+- Si falla la llamada, se muestra un mensaje de error del asistente.
+
+### Nota sobre Copilot
+
+Si quieres usar un servicio asociado a tu suscripción de Copilot, debes exponer o usar un endpoint HTTP compatible con este frontend y mapearlo en `VITE_AI_API_URL`.
+
+### Backend proxy recomendado
+
+En este repositorio tienes un proxy listo para AWS Lambda en `backend-proxy`.
+
+- Guía completa: `backend-proxy/README.md`.
+- El frontend puede apuntar al endpoint de API Gateway generado por ese proxy.
 
 ## Temas (Light/Dark)
 

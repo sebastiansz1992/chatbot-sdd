@@ -1,27 +1,48 @@
 import { useMemo, useState } from 'react'
 import { initialMessages } from '../../data/mockData'
 import type { ChatMessage } from '../../types/ui'
+import { requestAssistantReply } from '../../services/aiChatClient'
+
+const FALLBACK_ERROR_MESSAGE =
+  'No pude responder en este momento. Verifica la conexión con el proveedor de IA e inténtalo de nuevo.'
+
+function buildMessage(role: ChatMessage['role'], content: string): ChatMessage {
+  return {
+    id: `m-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    role,
+    content,
+    timestamp: new Date().toISOString(),
+  }
+}
 
 export function useChatState() {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages)
   const [draftMessage, setDraftMessage] = useState('')
+  const [isSending, setIsSending] = useState(false)
 
-  const canSend = useMemo(() => draftMessage.trim().length > 0, [draftMessage])
+  const canSend = useMemo(() => draftMessage.trim().length > 0 && !isSending, [draftMessage, isSending])
 
-  const sendMessage = () => {
+  const sendMessage = async () => {
     const content = draftMessage.trim()
-    if (!content) return
+    if (!content || isSending) return
 
-    const message: ChatMessage = {
-      id: `m-${Date.now()}`,
-      role: 'user',
-      content,
-      timestamp: new Date().toISOString(),
-    }
+    const userMessage = buildMessage('user', content)
+    const nextMessages = [...messages, userMessage]
 
-    setMessages((prev) => [...prev, message])
+    setMessages(nextMessages)
     setDraftMessage('')
+
+    setIsSending(true)
+
+    try {
+      const assistantText = await requestAssistantReply(nextMessages)
+      setMessages((prev) => [...prev, buildMessage('assistant', assistantText)])
+    } catch {
+      setMessages((prev) => [...prev, buildMessage('assistant', FALLBACK_ERROR_MESSAGE)])
+    } finally {
+      setIsSending(false)
+    }
   }
 
-  return { messages, draftMessage, setDraftMessage, canSend, sendMessage }
+  return { messages, draftMessage, setDraftMessage, canSend, sendMessage, isSending }
 }

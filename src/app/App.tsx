@@ -23,7 +23,7 @@ function getInitialTheme(): Theme {
 }
 
 export default function App() {
-  const { messages, draftMessage, setDraftMessage, canSend, sendMessage } = useChatState()
+  const { messages, draftMessage, setDraftMessage, canSend, sendMessage, isSending } = useChatState()
   const [theme, setTheme] = useState<Theme>(getInitialTheme)
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
 
@@ -67,6 +67,7 @@ export default function App() {
           onSend={sendMessage}
           canSend={canSend}
           placeholder={INPUT_PLACEHOLDER}
+          isSending={isSending}
         />
         <ChatDisclaimer text={DISCLAIMER} />
       </div>
