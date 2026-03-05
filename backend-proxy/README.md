@@ -14,7 +14,17 @@ Este proxy permite proteger la API key del proveedor de IA y exponer un endpoint
 - `AI_API_KEY` (opcional/recomendado): token o API key.
 - `AI_MODEL` (opcional): modelo por defecto.
 - `AI_AUTH_HEADER` (opcional): por defecto `Authorization`.
+- `AI_PROVIDER` (opcional): `openai-compatible` (default) o `gemini`.
 - `ALLOWED_ORIGIN` (opcional): origen permitido para CORS, por ejemplo `https://tudominio.com`.
+
+### Ejemplo para Google Gemini
+
+- `AI_PROVIDER=gemini`
+- `AI_API_URL=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`
+- `AI_API_KEY=<TU_GEMINI_API_KEY>`
+- `AI_AUTH_HEADER=x-goog-api-key`
+- `AI_MODEL=` (vacío, porque ya va en la URL)
+- `ALLOWED_ORIGIN=https://tu-dominio-frontend.com`
 
 ## Compilar
 

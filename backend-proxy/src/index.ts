@@ -14,6 +14,13 @@ type UpstreamResponse = {
       content?: string
     }
   }>
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{
+        text?: string
+      }>
+    }
+  }>
 }
 
 type LambdaEvent = {
@@ -33,6 +40,15 @@ type IncomingBody = {
 }
 
 const ALLOWED_ROLES = new Set<ChatRole>(['system', 'user', 'assistant'])
+
+type Provider = 'openai-compatible' | 'gemini'
+
+function resolveProvider(): Provider {
+  const configured = process.env.AI_PROVIDER?.trim().toLowerCase()
+
+  if (configured === 'gemini') return 'gemini'
+  return 'openai-compatible'
+}
 
 function jsonResponse(
   statusCode: number,
@@ -91,7 +107,88 @@ function resolveAssistantText(payload: UpstreamResponse) {
   const choiceText = payload.choices?.[0]?.message?.content?.trim()
   if (choiceText) return choiceText
 
+  const geminiText = payload.candidates?.[0]?.content?.parts?.[0]?.text?.trim()
+  if (geminiText) return geminiText
+
   throw new Error('El proveedor IA no devolvió contenido legible.')
+}
+
+function mapMessagesForGemini(messages: Array<{ role: ChatRole; content: string }>) {
+  const systemMessages = messages.filter((message) => message.role === 'system')
+  const conversationMessages = messages.filter((message) => message.role !== 'system')
+
+  const contents = conversationMessages.map((message) => ({
+    role: message.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: message.content }],
+  }))
+
+  return {
+    ...(systemMessages.length
+      ? {
+          systemInstruction: {
+            parts: [{ text: systemMessages.map((message) => message.content).join('\n') }],
+          },
+        }
+      : {}),
+    contents,
+  }
+}
+
+function getConfig() {
+  return {
+    apiUrl: process.env.AI_API_URL?.trim(),
+    apiKey: process.env.AI_API_KEY?.trim() ?? '',
+    authHeader: process.env.AI_AUTH_HEADER?.trim() || 'Authorization',
+    defaultModel: process.env.AI_MODEL?.trim() ?? '',
+    provider: resolveProvider(),
+  }
+}
+
+function resolveModel(inputModel: unknown, defaultModel: string) {
+  if (typeof inputModel === 'string' && inputModel.trim()) return inputModel.trim()
+  return defaultModel
+}
+
+function buildRequestBody(
+  provider: Provider,
+  messages: Array<{ role: ChatRole; content: string }>,
+  model: string,
+) {
+  if (provider === 'gemini') {
+    return {
+      ...mapMessagesForGemini(messages),
+      ...(model ? { model } : {}),
+    }
+  }
+
+  return {
+    messages,
+    ...(model ? { model } : {}),
+  }
+}
+
+function buildHeaders(provider: Provider, authHeader: string, apiKey: string) {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  }
+
+  if (!apiKey) return headers
+
+  if (provider === 'gemini') {
+    headers[authHeader] = apiKey
+    return headers
+  }
+
+  headers[authHeader] = apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`
+  return headers
+}
+
+async function requestUpstream(apiUrl: string, headers: Record<string, string>, body: Record<string, unknown>) {
+  return fetch(apiUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  })
 }
 
 export async function handler(event: LambdaEvent): Promise<LambdaResult> {
@@ -106,10 +203,7 @@ export async function handler(event: LambdaEvent): Promise<LambdaResult> {
     return jsonResponse(405, { error: 'Método no permitido.' }, allowedOrigin)
   }
 
-  const apiUrl = process.env.AI_API_URL?.trim()
-  const apiKey = process.env.AI_API_KEY?.trim() ?? ''
-  const authHeader = process.env.AI_AUTH_HEADER?.trim() || 'Authorization'
-  const defaultModel = process.env.AI_MODEL?.trim() ?? ''
+  const { apiUrl, apiKey, authHeader, defaultModel, provider } = getConfig()
 
   if (!apiUrl) {
     return jsonResponse(500, { error: 'Falta configurar AI_API_URL.' }, allowedOrigin)
@@ -118,27 +212,11 @@ export async function handler(event: LambdaEvent): Promise<LambdaResult> {
   try {
     const parsed = JSON.parse(event.body ?? '{}') as IncomingBody
     const messages = sanitizeMessages(parsed.messages)
+    const model = resolveModel(parsed.model, defaultModel)
+    const requestBody = buildRequestBody(provider, messages, model)
+    const headers = buildHeaders(provider, authHeader, apiKey)
 
-    const model = typeof parsed.model === 'string' && parsed.model.trim() ? parsed.model.trim() : defaultModel
-
-    const requestBody: UpstreamRequest = {
-      messages,
-      ...(model ? { model } : {}),
-    }
-
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    }
-
-    if (apiKey) {
-      headers[authHeader] = apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`
-    }
-
-    const upstreamResponse = await fetch(apiUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(requestBody),
-    })
+    const upstreamResponse = await requestUpstream(apiUrl, headers, requestBody)
 
     if (!upstreamResponse.ok) {
       return jsonResponse(
