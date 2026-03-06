@@ -18,6 +18,11 @@ type ChatCompletionResponse = {
   }>
 }
 
+type ChatErrorResponse = {
+  error?: string
+  message?: string
+}
+
 function getApiConfig() {
   return {
     apiUrl: import.meta.env.VITE_AI_API_URL?.trim() ?? '',
@@ -27,11 +32,25 @@ function getApiConfig() {
   }
 }
 
+const LOCAL_ERROR_PATTERNS = [
+  /^failed to fetch$/i,
+  /^no pude responder en este momento/i,
+  /^el servicio de ia respondio con estado/i,
+  /^resource_exhausted:/i,
+  /^metodo no permitido/i,
+  /^falta configurar /i,
+]
+
+function isLocalErrorAssistantMessage(role: ChatRole, content: string) {
+  if (role !== 'assistant') return false
+  return LOCAL_ERROR_PATTERNS.some((pattern) => pattern.test(content))
+}
+
 function mapToRequestMessages(messages: ChatMessage[]) {
-  return messages.map(({ role, content }) => ({
-    role,
-    content,
-  }))
+  return messages
+    .map(({ role, content }) => ({ role, content: content.trim() }))
+    .filter(({ content }) => content.length > 0)
+    .filter(({ role, content }) => !isLocalErrorAssistantMessage(role, content))
 }
 
 function resolveAssistantText(payload: ChatCompletionResponse) {
@@ -72,6 +91,17 @@ export async function requestAssistantReply(messages: ChatMessage[]) {
   })
 
   if (!response.ok) {
+    try {
+      const payload = (await response.json()) as ChatErrorResponse
+      const detail = payload.error?.trim() || payload.message?.trim()
+
+      if (detail) {
+        throw new Error(detail)
+      }
+    } catch {
+      // Fallback to generic status error.
+    }
+
     throw new Error(`El servicio de IA respondió con estado ${response.status}.`)
   }
 

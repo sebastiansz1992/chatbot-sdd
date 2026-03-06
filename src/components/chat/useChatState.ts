@@ -37,8 +37,9 @@ export function useChatState() {
     try {
       const assistantText = await requestAssistantReply(nextMessages)
       setMessages((prev) => [...prev, buildMessage('assistant', assistantText)])
-    } catch {
-      setMessages((prev) => [...prev, buildMessage('assistant', FALLBACK_ERROR_MESSAGE)])
+    } catch (error) {
+      const message = error instanceof Error && error.message.trim() ? error.message : FALLBACK_ERROR_MESSAGE
+      setMessages((prev) => [...prev, buildMessage('assistant', message)])
     } finally {
       setIsSending(false)
     }
