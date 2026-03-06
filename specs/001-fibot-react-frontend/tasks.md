@@ -60,3 +60,30 @@
 - [x] T047 Run lint/build/test quality gates and record outcomes in specs/001-fibot-react-frontend/quickstart.md
 - [x] T048 Measure first contentful render against <2.0s target and log result in specs/001-fibot-react-frontend/quickstart.md
 - [x] T049 Measure message-send interaction feedback against <100ms target and log result in specs/001-fibot-react-frontend/quickstart.md
+
+## Phase 7: US4 — AI Agent Integration
+- [x] T050 [US4] Create AI HTTP client service in src/services/aiChatClient.ts
+- [x] T051 [US4] Add environment variable template in .env.example with VITE_AI_* variables
+- [x] T052 [US4] Refactor useChatState to async send with AI request/response cycle in src/components/chat/useChatState.ts
+- [x] T053 [US4] Add isSending loading state and disabled UI in ChatComposer and App
+- [x] T054 [US4] Implement error detail parsing and display as assistant message in chat timeline
+- [x] T055 [US4] Filter local error assistant messages from AI request payload in aiChatClient.ts
+- [x] T056 [US4] Update unit tests for async AI flow in tests/unit/chatFlow.sendMessage.test.tsx
+
+## Phase 8: Backend Proxy (Lambda)
+- [x] T057 Create Lambda handler with provider routing in backend-proxy/src/index.ts
+- [x] T058 Configure TypeScript build for CommonJS output in backend-proxy/tsconfig.json
+- [x] T059 Add build:proxy npm script in package.json
+- [x] T060 Implement input validation and sanitization (role whitelist, non-empty content) in handler
+- [x] T061 Add Gemini provider support: message format mapping, systemInstruction, x-goog-api-key auth
+- [x] T062 Add dual input format support (messages + contents) with resolveIncomingMessages
+- [x] T063 Implement upstream error detail parsing with 429 rate-limit hint
+- [x] T064 Add CORS headers to all Lambda responses (Access-Control-Allow-Origin, Methods, Headers)
+- [x] T065 Create backend proxy deploy documentation in backend-proxy/README.md
+
+## Phase 9: AWS Deployment
+- [x] T066 Deploy frontend build to S3 static website hosting
+- [x] T067 Deploy Lambda function with Node.js 20.x runtime
+- [x] T068 Configure API Gateway HTTP API with POST route to Lambda
+- [ ] T069 Configure API Gateway CORS preflight to return proper Access-Control-Allow-Origin headers
+- [ ] T070 Verify end-to-end flow: S3 frontend → API Gateway → Lambda → Gemini → response in chat

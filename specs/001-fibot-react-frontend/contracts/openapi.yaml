@@ -1,5 +1,159 @@
 openapi: 3.0.3
 info:
-  title: FiBot Frontend Contract
-  version: 1.0.0
-paths: {}
+  title: FiBot AI Proxy API
+  description: Backend proxy that forwards chat messages to an AI provider (Gemini or OpenAI-compatible) and returns assistant responses.
+  version: 2.0.0
+
+servers:
+  - url: https://{apiId}.execute-api.{region}.amazonaws.com/{stage}
+    description: AWS API Gateway endpoint
+    variables:
+      apiId:
+        default: fqaxg56ldf
+      region:
+        default: us-east-1
+      stage:
+        default: default
+
+paths:
+  /fibot-ai-proxy:
+    post:
+      summary: Send chat messages and receive AI assistant response
+      operationId: chatProxy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/OpenAIRequest'
+                - $ref: '#/components/schemas/GeminiRequest'
+      responses:
+        '200':
+          description: Successful AI response
+          headers:
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request (malformed body, missing messages)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed (only POST accepted)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded on upstream AI provider
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseWithHint'
+        '500':
+          description: Server error (missing config or upstream failure)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    options:
+      summary: CORS preflight
+      responses:
+        '204':
+          description: Preflight response with CORS headers
+          headers:
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+            Access-Control-Allow-Methods:
+              schema:
+                type: string
+                example: POST,OPTIONS
+            Access-Control-Allow-Headers:
+              schema:
+                type: string
+                example: Content-Type,Authorization
+
+components:
+  schemas:
+    OpenAIRequest:
+      type: object
+      required:
+        - messages
+      properties:
+        model:
+          type: string
+          description: Optional model override
+        messages:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required:
+              - role
+              - content
+            properties:
+              role:
+                type: string
+                enum: [system, user, assistant]
+              content:
+                type: string
+                minLength: 1
+
+    GeminiRequest:
+      type: object
+      required:
+        - contents
+      properties:
+        model:
+          type: string
+        contents:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required:
+              - role
+              - parts
+            properties:
+              role:
+                type: string
+                enum: [user, model]
+              parts:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    text:
+                      type: string
+                      minLength: 1
+
+    SuccessResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          description: Assistant response text
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error detail message
+
+    ErrorResponseWithHint:
+      type: object
+      properties:
+        error:
+          type: string
+        hint:
+          type: string
+          description: Actionable suggestion (e.g., check billing)
