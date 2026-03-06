@@ -199,6 +199,76 @@ function resolveDataFabricPoolConfig(config) {
         },
     };
 }
+function resolveDataFabricTarget(config) {
+    if (config.dataFabricConnectionString) {
+        const serverMatch = /(?:^|;)\s*server\s*=\s*([^;]+)/i.exec(config.dataFabricConnectionString);
+        const databaseMatch = /(?:^|;)\s*(?:database|initial catalog)\s*=\s*([^;]+)/i.exec(config.dataFabricConnectionString);
+        return {
+            server: serverMatch?.[1]?.trim() ?? '(server-no-detectado)',
+            database: databaseMatch?.[1]?.trim() ?? '(database-no-detectada)',
+        };
+    }
+    return {
+        server: normalizeFabricServer(config.dataFabricServer),
+        database: config.dataFabricDatabase,
+    };
+}
+function isInvalidObjectNameError(message) {
+    return /invalid object name/i.test(message);
+}
+function buildSchemaHintFromRows(rows) {
+    if (!rows.length)
+        return '';
+    const tableMap = new Map();
+    for (const row of rows) {
+        const schema = row.TABLE_SCHEMA?.trim();
+        const table = row.TABLE_NAME?.trim();
+        const column = row.COLUMN_NAME?.trim();
+        if (!schema || !table || !column)
+            continue;
+        const key = `${schema}.${table}`;
+        if (!tableMap.has(key)) {
+            if (tableMap.size >= 30)
+                continue;
+            tableMap.set(key, {
+                schema,
+                table,
+                columns: [],
+            });
+        }
+        const tableEntry = tableMap.get(key);
+        if (tableEntry && tableEntry.columns.length < 12 && !tableEntry.columns.includes(column)) {
+            tableEntry.columns.push(column);
+        }
+    }
+    const lines = Array.from(tableMap.values()).map((entry) => `- [${entry.schema}].[${entry.table}](${entry.columns.join(', ')})`);
+    if (!lines.length)
+        return '';
+    return ['Tablas disponibles en Data Fabric (usa solo estas):', ...lines].join('\n');
+}
+async function discoverSchemaHint(config) {
+    const fabricPoolConfig = resolveDataFabricPoolConfig(config);
+    const pool = new mssql_1.default.ConnectionPool(fabricPoolConfig);
+    try {
+        await pool.connect();
+        const result = await pool.request().query(`
+      SELECT TOP (800)
+        TABLE_SCHEMA,
+        TABLE_NAME,
+        COLUMN_NAME,
+        DATA_TYPE
+      FROM INFORMATION_SCHEMA.COLUMNS
+      ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION
+    `);
+        return buildSchemaHintFromRows((result.recordset ?? []));
+    }
+    catch {
+        return '';
+    }
+    finally {
+        await pool.close();
+    }
+}
 function resolveModel(inputModel, defaultModel) {
     if (typeof inputModel === 'string' && inputModel.trim())
         return inputModel.trim();
@@ -295,15 +365,19 @@ function validateReadOnlySql(sqlQuery) {
     }
     return normalized;
 }
-async function generateSqlFromQuestion(config, question) {
+async function generateSqlFromQuestion(config, question, schemaHint, previousError) {
     const systemPrompt = [
         'Eres un asistente que convierte preguntas de negocio a SQL T-SQL para Microsoft Fabric Warehouse.',
         'Devuelve solo una consulta SQL de lectura (SELECT o WITH).',
+        'Usa nombres calificados con esquema, por ejemplo [dbo].[MiTabla].',
         'No uses INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, MERGE, EXEC ni múltiples sentencias.',
         'No incluyas explicación ni markdown.',
-        config.dataFabricSchemaHint
-            ? `Contexto de esquema/tablas disponible:\n${config.dataFabricSchemaHint}`
+        schemaHint
+            ? `Contexto de esquema/tablas disponible:\n${schemaHint}`
             : 'Si no conoces columnas exactas, usa nombres razonables y consulta conservadora.',
+        previousError
+            ? `Error previo al ejecutar SQL (evita repetirlo): ${previousError}`
+            : 'Asegúrate de que todas las tablas/columnas existan en el contexto.',
     ].join('\n\n');
     const sqlDraft = await completeWithAI(config, [
         { role: 'system', content: systemPrompt },
@@ -314,6 +388,7 @@ async function generateSqlFromQuestion(config, question) {
 }
 async function executeSqlQuery(config, sqlQuery) {
     const fabricPoolConfig = resolveDataFabricPoolConfig(config);
+    const target = resolveDataFabricTarget(config);
     const pool = new mssql_1.default.ConnectionPool(fabricPoolConfig);
     try {
         await pool.connect();
@@ -326,6 +401,14 @@ async function executeSqlQuery(config, sqlQuery) {
         const result = await Promise.race([request.query(sqlQuery), timeoutPromise]);
         const records = (result.recordset ?? []);
         return records.slice(0, config.dataFabricMaxRows);
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : 'Error desconocido al consultar Data Fabric.';
+        if (/database was not found|insufficient permissions to connect to it|login failed/i.test(message)) {
+            throw new Error(`${message} (target: server=${target.server}, database=${target.database}). ` +
+                'Verifica que DATA_FABRIC_DATABASE sea el nombre exacto del Warehouse/SQL endpoint y que el Service Principal tenga permisos de acceso y lectura.');
+        }
+        throw new Error(`${message} (target: server=${target.server}, database=${target.database})`);
     }
     finally {
         await pool.close();
@@ -361,8 +444,23 @@ async function handleDirectChat(config, parsed, messages) {
 }
 async function handleDataFabricAgentFlow(config, messages) {
     const question = getLastUserQuestion(messages);
-    const sqlQuery = await generateSqlFromQuestion(config, question);
-    const rows = await executeSqlQuery(config, sqlQuery);
+    const discoveredSchemaHint = await discoverSchemaHint(config);
+    const baseSchemaHint = [config.dataFabricSchemaHint, discoveredSchemaHint].filter(Boolean).join('\n\n').trim();
+    let sqlQuery = await generateSqlFromQuestion(config, question, baseSchemaHint);
+    let rows = [];
+    try {
+        rows = await executeSqlQuery(config, sqlQuery);
+    }
+    catch (error) {
+        const firstError = error instanceof Error ? error.message : 'Error desconocido al ejecutar SQL.';
+        if (!isInvalidObjectNameError(firstError)) {
+            throw error;
+        }
+        const retrySchemaHint = await discoverSchemaHint(config);
+        const mergedRetryHint = [config.dataFabricSchemaHint, retrySchemaHint].filter(Boolean).join('\n\n').trim();
+        sqlQuery = await generateSqlFromQuestion(config, question, mergedRetryHint, firstError);
+        rows = await executeSqlQuery(config, sqlQuery);
+    }
     const message = await answerWithData(config, question, sqlQuery, rows);
     return {
         message,
