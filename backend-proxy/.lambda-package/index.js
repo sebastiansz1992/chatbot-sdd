@@ -154,6 +154,8 @@ function getConfig() {
         azureTenantId: process.env.AZURE_TENANT_ID?.trim() ?? '',
         azureClientId: process.env.AZURE_CLIENT_ID?.trim() ?? '',
         azureClientSecret: process.env.AZURE_CLIENT_SECRET?.trim() ?? '',
+        dataFabricAllowedSchema: process.env.DATA_FABRIC_ALLOWED_SCHEMA?.trim() ?? 'dbo',
+        dataFabricAllowedTable: process.env.DATA_FABRIC_ALLOWED_TABLE?.trim() ?? 'fact_presupuesto_gold',
         dataFabricSchemaHint: process.env.DATA_FABRIC_SCHEMA_HINT?.trim() ?? '',
         dataFabricMaxRows: parsePositiveInt(process.env.DATA_FABRIC_MAX_ROWS, 100),
         dataFabricTimeoutMs: parsePositiveInt(process.env.DATA_FABRIC_TIMEOUT_SECONDS, 30) * 1000,
@@ -216,6 +218,56 @@ function resolveDataFabricTarget(config) {
 function isInvalidObjectNameError(message) {
     return /invalid object name/i.test(message);
 }
+function normalizeSqlIdentifier(identifier) {
+    return identifier.replace(/[\[\]"`]/g, '').trim().toLowerCase();
+}
+function resolveBaseTableName(identifier) {
+    const normalized = normalizeSqlIdentifier(identifier);
+    const segments = normalized.split('.').filter(Boolean);
+    return segments[segments.length - 1] ?? '';
+}
+function resolveSchemaAndTable(identifier) {
+    const normalized = normalizeSqlIdentifier(identifier);
+    const segments = normalized.split('.').filter(Boolean);
+    if (segments.length < 2) {
+        return {
+            schema: '',
+            table: segments[segments.length - 1] ?? '',
+        };
+    }
+    return {
+        schema: segments[segments.length - 2] ?? '',
+        table: segments[segments.length - 1] ?? '',
+    };
+}
+function extractTableReferences(sqlQuery) {
+    const references = [];
+    const regex = /\b(?:from|join)\s+([a-z0-9_\.\[\]"`]+)/gi;
+    let match = regex.exec(sqlQuery);
+    while (match) {
+        references.push(match[1]);
+        match = regex.exec(sqlQuery);
+    }
+    return references;
+}
+function validateAllowedTableUsage(sqlQuery, allowedSchema, allowedTable) {
+    const normalizedAllowedSchema = normalizeSqlIdentifier(allowedSchema);
+    const normalizedAllowedTable = resolveBaseTableName(allowedTable);
+    if (!normalizedAllowedSchema || !normalizedAllowedTable) {
+        throw new Error('DATA_FABRIC_ALLOWED_TABLE está vacío o inválido.');
+    }
+    const references = extractTableReferences(sqlQuery);
+    if (!references.length) {
+        throw new Error('La consulta debe incluir FROM/JOIN sobre la tabla permitida con esquema explícito.');
+    }
+    const invalidReference = references.find((reference) => {
+        const parsed = resolveSchemaAndTable(reference);
+        return parsed.schema !== normalizedAllowedSchema || parsed.table !== normalizedAllowedTable;
+    });
+    if (invalidReference) {
+        throw new Error(`La consulta solo puede usar [${normalizedAllowedSchema}].[${normalizedAllowedTable}]. Se detectó referencia no permitida: ${invalidReference}.`);
+    }
+}
 function buildSchemaHintFromRows(rows) {
     if (!rows.length)
         return '';
@@ -251,13 +303,19 @@ async function discoverSchemaHint(config) {
     const pool = new mssql_1.default.ConnectionPool(fabricPoolConfig);
     try {
         await pool.connect();
-        const result = await pool.request().query(`
+        const result = await pool
+            .request()
+            .input('allowedSchema', mssql_1.default.NVarChar(256), config.dataFabricAllowedSchema)
+            .input('allowedTable', mssql_1.default.NVarChar(256), config.dataFabricAllowedTable)
+            .query(`
       SELECT TOP (800)
         TABLE_SCHEMA,
         TABLE_NAME,
         COLUMN_NAME,
         DATA_TYPE
       FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE LOWER(TABLE_SCHEMA) = LOWER(@allowedSchema)
+        AND LOWER(TABLE_NAME) = LOWER(@allowedTable)
       ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION
     `);
         return buildSchemaHintFromRows((result.recordset ?? []));
@@ -370,6 +428,8 @@ async function generateSqlFromQuestion(config, question, schemaHint, previousErr
         'Eres un asistente que convierte preguntas de negocio a SQL T-SQL para Microsoft Fabric Warehouse.',
         'Devuelve solo una consulta SQL de lectura (SELECT o WITH).',
         'Usa nombres calificados con esquema, por ejemplo [dbo].[MiTabla].',
+        `Usa exclusivamente la tabla [${config.dataFabricAllowedSchema}].[${config.dataFabricAllowedTable}]. No uses ninguna otra tabla.`,
+        `No uses referencias sin esquema. Siempre usa [${config.dataFabricAllowedSchema}].[${config.dataFabricAllowedTable}] en FROM/JOIN.`,
         'No uses INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, MERGE, EXEC ni múltiples sentencias.',
         'No incluyas explicación ni markdown.',
         schemaHint
@@ -384,7 +444,9 @@ async function generateSqlFromQuestion(config, question, schemaHint, previousErr
         { role: 'user', content: question },
     ], config.sqlModel);
     const sqlCandidate = extractSqlCandidate(sqlDraft);
-    return validateReadOnlySql(sqlCandidate);
+    const readOnlySql = validateReadOnlySql(sqlCandidate);
+    validateAllowedTableUsage(readOnlySql, config.dataFabricAllowedSchema, config.dataFabricAllowedTable);
+    return readOnlySql;
 }
 async function executeSqlQuery(config, sqlQuery) {
     const fabricPoolConfig = resolveDataFabricPoolConfig(config);

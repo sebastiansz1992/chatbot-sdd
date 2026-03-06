@@ -30,6 +30,7 @@ Este proxy protege la API key del proveedor de IA y ahora soporta un flujo de ag
 - `AZURE_CLIENT_SECRET` (opcional): client secret de App Registration.
 - `ONELAKE_WORKSPACE_NAME` (opcional): fallback para `DATA_FABRIC_DATABASE`.
 - `DATA_FABRIC_SCHEMA_HINT` (opcional): contexto de tablas/columnas para mejorar SQL generado.
+- `DATA_FABRIC_ALLOWED_SCHEMA` (opcional): esquema permitido para consultas SQL generadas. Default: `dbo`.
 - `DATA_FABRIC_MAX_ROWS` (opcional): límite de filas retornadas al prompt final, default `100`.
 - `DATA_FABRIC_TIMEOUT_SECONDS` (opcional): timeout de consulta SQL, default `30`.
 
@@ -55,6 +56,7 @@ Este proxy protege la API key del proveedor de IA y ahora soporta un flujo de ag
 - `AI_AUTH_HEADER=x-goog-api-key`
 - `DATA_FABRIC_CONNECTION_STRING=Server=tcp:<server>.datawarehouse.fabric.microsoft.com,1433;Database=<db>;User ID=<user>;Password=<password>;Encrypt=true;TrustServerCertificate=false;`
 - `DATA_FABRIC_SCHEMA_HINT=Tabla Ventas(fecha, monto, categoria), Tabla Clientes(id, segmento)`
+- `DATA_FABRIC_ALLOWED_SCHEMA=dbo`
 - `DATA_FABRIC_MAX_ROWS=100`
 - `DATA_FABRIC_TIMEOUT_SECONDS=30`
 
@@ -71,6 +73,7 @@ Este proxy protege la API key del proveedor de IA y ahora soporta un flujo de ag
 - `AZURE_CLIENT_SECRET=<client-secret>`
 - `ONELAKE_WORKSPACE_NAME=Fibot` (opcional, fallback para database)
 - `DATA_FABRIC_SCHEMA_HINT=Tabla Ventas(fecha, monto, categoria), Tabla Clientes(id, segmento)`
+- `DATA_FABRIC_ALLOWED_SCHEMA=dbo`
 - `DATA_FABRIC_MAX_ROWS=100`
 - `DATA_FABRIC_TIMEOUT_SECONDS=30`
 
