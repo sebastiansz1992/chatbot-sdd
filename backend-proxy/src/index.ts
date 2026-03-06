@@ -23,6 +23,14 @@ type UpstreamResponse = {
   }>
 }
 
+type UpstreamErrorPayload = {
+  error?: {
+    message?: string
+    status?: string
+    code?: number
+  }
+}
+
 type LambdaEvent = {
   httpMethod?: string
   body: string | null
@@ -37,6 +45,12 @@ type LambdaResult = {
 type IncomingBody = {
   model?: unknown
   messages?: Array<{ role?: unknown; content?: unknown }>
+  contents?: Array<{
+    role?: unknown
+    parts?: Array<{
+      text?: unknown
+    }>
+  }>
 }
 
 const ALLOWED_ROLES = new Set<ChatRole>(['system', 'user', 'assistant'])
@@ -97,6 +111,51 @@ function sanitizeMessages(value: IncomingBody['messages']) {
   }
 
   return sanitized
+}
+
+function sanitizeGeminiContents(value: IncomingBody['contents']) {
+  if (!Array.isArray(value)) {
+    throw new TypeError('contents debe ser un arreglo.')
+  }
+
+  const normalized = value
+    .filter((item) => item && typeof item === 'object')
+    .map((item) => {
+      const role = item.role
+      const firstPart = Array.isArray(item.parts) ? item.parts[0] : undefined
+      const text = firstPart?.text
+
+      if (typeof role !== 'string' || (role !== 'user' && role !== 'model')) {
+        throw new TypeError('Cada item en contents debe incluir role user o model.')
+      }
+
+      if (typeof text !== 'string' || !text.trim()) {
+        throw new TypeError('Cada item en contents debe incluir parts[0].text no vacío.')
+      }
+
+      return {
+        role: role === 'model' ? 'assistant' : 'user',
+        content: text.trim(),
+      } satisfies { role: ChatRole; content: string }
+    })
+
+  if (!normalized.length) {
+    throw new TypeError('Debe enviarse al menos un elemento en contents.')
+  }
+
+  return normalized
+}
+
+function resolveIncomingMessages(parsed: IncomingBody) {
+  if (Array.isArray(parsed.messages)) {
+    return sanitizeMessages(parsed.messages)
+  }
+
+  if (Array.isArray(parsed.contents)) {
+    return sanitizeGeminiContents(parsed.contents)
+  }
+
+  throw new TypeError('Debes enviar messages o contents en el body.')
 }
 
 function resolveAssistantText(payload: UpstreamResponse) {
@@ -191,6 +250,21 @@ async function requestUpstream(apiUrl: string, headers: Record<string, string>, 
   })
 }
 
+async function getUpstreamErrorDetail(response: Response) {
+  try {
+    const payload = (await response.json()) as UpstreamErrorPayload
+    const message = payload.error?.message?.trim()
+    const status = payload.error?.status?.trim()
+
+    if (message && status) return `${status}: ${message}`
+    if (message) return message
+  } catch {
+    // Fallback to generic status below.
+  }
+
+  return `El proveedor IA respondió con estado ${response.status}.`
+}
+
 export async function handler(event: LambdaEvent): Promise<LambdaResult> {
   const allowedOrigin = process.env.ALLOWED_ORIGIN?.trim() || '*'
   const method = event.httpMethod ?? 'POST'
@@ -211,7 +285,7 @@ export async function handler(event: LambdaEvent): Promise<LambdaResult> {
 
   try {
     const parsed = JSON.parse(event.body ?? '{}') as IncomingBody
-    const messages = sanitizeMessages(parsed.messages)
+    const messages = resolveIncomingMessages(parsed)
     const model = resolveModel(parsed.model, defaultModel)
     const requestBody = buildRequestBody(provider, messages, model)
     const headers = buildHeaders(provider, authHeader, apiKey)
@@ -219,9 +293,18 @@ export async function handler(event: LambdaEvent): Promise<LambdaResult> {
     const upstreamResponse = await requestUpstream(apiUrl, headers, requestBody)
 
     if (!upstreamResponse.ok) {
+      const detail = await getUpstreamErrorDetail(upstreamResponse)
+      const hint =
+        upstreamResponse.status === 429
+          ? 'Revisa cuotas/rate limits en Gemini y confirma billing habilitado.'
+          : undefined
+
       return jsonResponse(
         upstreamResponse.status,
-        { error: `El proveedor IA respondió con estado ${upstreamResponse.status}.` },
+        {
+          error: detail,
+          ...(hint ? { hint } : {}),
+        },
         allowedOrigin,
       )
     }
