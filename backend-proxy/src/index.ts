@@ -1,3 +1,5 @@
+import sql from 'mssql'
+
 type ChatRole = 'system' | 'user' | 'assistant'
 
 type UpstreamRequest = {
@@ -56,6 +58,42 @@ type IncomingBody = {
 const ALLOWED_ROLES = new Set<ChatRole>(['system', 'user', 'assistant'])
 
 type Provider = 'openai-compatible' | 'gemini'
+
+type ProxyConfig = {
+  apiUrl: string | undefined
+  apiKey: string
+  authHeader: string
+  defaultModel: string
+  sqlModel: string
+  answerModel: string
+  provider: Provider
+  dataFabricConnectionString: string
+  dataFabricServer: string
+  dataFabricDatabase: string
+  azureTenantId: string
+  azureClientId: string
+  azureClientSecret: string
+  dataFabricSchemaHint: string
+  dataFabricMaxRows: number
+  dataFabricTimeoutMs: number
+}
+
+type QueryRow = Record<string, unknown>
+
+const DANGEROUS_SQL_KEYWORDS = [
+  /\binsert\b/i,
+  /\bupdate\b/i,
+  /\bdelete\b/i,
+  /\bdrop\b/i,
+  /\balter\b/i,
+  /\btruncate\b/i,
+  /\bcreate\b/i,
+  /\bmerge\b/i,
+  /\bgrant\b/i,
+  /\brevoke\b/i,
+  /\bexec\b/i,
+  /\bexecute\b/i,
+]
 
 function resolveProvider(): Provider {
   const configured = process.env.AI_PROVIDER?.trim().toLowerCase()
@@ -193,13 +231,80 @@ function mapMessagesForGemini(messages: Array<{ role: ChatRole; content: string 
   }
 }
 
-function getConfig() {
+function parsePositiveInt(value: string | undefined, fallback: number) {
+  if (!value) return fallback
+  const parsed = Number.parseInt(value, 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+  return parsed
+}
+
+function getConfig(): ProxyConfig {
   return {
     apiUrl: process.env.AI_API_URL?.trim(),
     apiKey: process.env.AI_API_KEY?.trim() ?? '',
     authHeader: process.env.AI_AUTH_HEADER?.trim() || 'Authorization',
     defaultModel: process.env.AI_MODEL?.trim() ?? '',
+    sqlModel: process.env.AI_SQL_MODEL?.trim() ?? process.env.AI_MODEL?.trim() ?? '',
+    answerModel: process.env.AI_ANSWER_MODEL?.trim() ?? process.env.AI_MODEL?.trim() ?? '',
     provider: resolveProvider(),
+    dataFabricConnectionString: process.env.DATA_FABRIC_CONNECTION_STRING?.trim() ?? '',
+    dataFabricServer: process.env.DATA_FABRIC_SERVER?.trim() ?? '',
+    dataFabricDatabase: process.env.DATA_FABRIC_DATABASE?.trim() ?? process.env.ONELAKE_WORKSPACE_NAME?.trim() ?? '',
+    azureTenantId: process.env.AZURE_TENANT_ID?.trim() ?? '',
+    azureClientId: process.env.AZURE_CLIENT_ID?.trim() ?? '',
+    azureClientSecret: process.env.AZURE_CLIENT_SECRET?.trim() ?? '',
+    dataFabricSchemaHint: process.env.DATA_FABRIC_SCHEMA_HINT?.trim() ?? '',
+    dataFabricMaxRows: parsePositiveInt(process.env.DATA_FABRIC_MAX_ROWS, 100),
+    dataFabricTimeoutMs: parsePositiveInt(process.env.DATA_FABRIC_TIMEOUT_SECONDS, 30) * 1000,
+  }
+}
+
+function normalizeFabricServer(server: string) {
+  const trimmed = server.trim()
+  if (!trimmed) return ''
+
+  const noProtocol = trimmed.replace(/^tcp:/i, '').replace(/^https?:\/\//i, '')
+  const noPort = noProtocol.replace(/:\d+$/, '')
+  return noPort.replace(/\/$/, '')
+}
+
+function hasServicePrincipalConfig(config: ProxyConfig) {
+  return Boolean(
+    config.dataFabricServer &&
+      config.dataFabricDatabase &&
+      config.azureTenantId &&
+      config.azureClientId &&
+      config.azureClientSecret,
+  )
+}
+
+function resolveDataFabricPoolConfig(config: ProxyConfig): string | sql.config {
+  if (config.dataFabricConnectionString) {
+    return config.dataFabricConnectionString
+  }
+
+  if (!hasServicePrincipalConfig(config)) {
+    throw new Error(
+      'Falta configuración de Data Fabric. Define DATA_FABRIC_CONNECTION_STRING o usa DATA_FABRIC_SERVER, DATA_FABRIC_DATABASE, AZURE_TENANT_ID, AZURE_CLIENT_ID y AZURE_CLIENT_SECRET.',
+    )
+  }
+
+  return {
+    server: normalizeFabricServer(config.dataFabricServer),
+    database: config.dataFabricDatabase,
+    port: 1433,
+    options: {
+      encrypt: true,
+      trustServerCertificate: false,
+    },
+    authentication: {
+      type: 'azure-active-directory-service-principal-secret',
+      options: {
+        tenantId: config.azureTenantId,
+        clientId: config.azureClientId,
+        clientSecret: config.azureClientSecret,
+      },
+    },
   }
 }
 
@@ -250,6 +355,192 @@ async function requestUpstream(apiUrl: string, headers: Record<string, string>, 
   })
 }
 
+async function completeWithAI(
+  config: ProxyConfig,
+  messages: Array<{ role: ChatRole; content: string }>,
+  model: string,
+) {
+  if (!config.apiUrl) {
+    throw new Error('Falta configurar AI_API_URL.')
+  }
+
+  const requestBody = buildRequestBody(config.provider, messages, model)
+  const headers = buildHeaders(config.provider, config.authHeader, config.apiKey)
+  const upstreamResponse = await requestUpstream(config.apiUrl, headers, requestBody)
+
+  if (!upstreamResponse.ok) {
+    const detail = await getUpstreamErrorDetail(upstreamResponse)
+    const hint =
+      upstreamResponse.status === 429
+        ? 'Revisa cuotas/rate limits en Gemini y confirma billing habilitado.'
+        : undefined
+
+    const reason = hint ? `${detail} ${hint}` : detail
+    throw new Error(reason)
+  }
+
+  const payload = (await upstreamResponse.json()) as UpstreamResponse
+  return resolveAssistantText(payload)
+}
+
+function getLastUserQuestion(messages: Array<{ role: ChatRole; content: string }>) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === 'user') {
+      return messages[index].content
+    }
+  }
+
+  throw new Error('No se encontró una pregunta del usuario para convertir a SQL.')
+}
+
+function unwrapCodeFence(value: string) {
+  const fencedRegex = /```(?:sql)?\s*([\s\S]*?)```/i
+  const fenced = fencedRegex.exec(value)
+  if (fenced?.[1]) return fenced[1].trim()
+  return value.trim()
+}
+
+function extractSqlCandidate(raw: string) {
+  const unwrapped = unwrapCodeFence(raw)
+  const singleLine = unwrapped
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(' ')
+
+  if (!singleLine) {
+    throw new Error('La IA no devolvió SQL utilizable.')
+  }
+
+  return singleLine.replace(/;\s*$/, '')
+}
+
+function validateReadOnlySql(sqlQuery: string) {
+  const normalized = sqlQuery.trim()
+  const lower = normalized.toLowerCase()
+
+  if (!(lower.startsWith('select') || lower.startsWith('with'))) {
+    throw new Error('Solo se permiten consultas de lectura (SELECT / WITH).')
+  }
+
+  if (DANGEROUS_SQL_KEYWORDS.some((pattern) => pattern.test(lower))) {
+    throw new Error('La consulta generada incluye comandos no permitidos para solo lectura.')
+  }
+
+  if (lower.includes('--') || lower.includes('/*') || lower.includes('*/')) {
+    throw new Error('La consulta generada contiene comentarios SQL no permitidos.')
+  }
+
+  return normalized
+}
+
+async function generateSqlFromQuestion(config: ProxyConfig, question: string) {
+  const systemPrompt = [
+    'Eres un asistente que convierte preguntas de negocio a SQL T-SQL para Microsoft Fabric Warehouse.',
+    'Devuelve solo una consulta SQL de lectura (SELECT o WITH).',
+    'No uses INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, MERGE, EXEC ni múltiples sentencias.',
+    'No incluyas explicación ni markdown.',
+    config.dataFabricSchemaHint
+      ? `Contexto de esquema/tablas disponible:\n${config.dataFabricSchemaHint}`
+      : 'Si no conoces columnas exactas, usa nombres razonables y consulta conservadora.',
+  ].join('\n\n')
+
+  const sqlDraft = await completeWithAI(
+    config,
+    [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: question },
+    ],
+    config.sqlModel,
+  )
+
+  const sqlCandidate = extractSqlCandidate(sqlDraft)
+  return validateReadOnlySql(sqlCandidate)
+}
+
+async function executeSqlQuery(config: ProxyConfig, sqlQuery: string) {
+  const fabricPoolConfig = resolveDataFabricPoolConfig(config)
+  const pool = new sql.ConnectionPool(fabricPoolConfig)
+
+  try {
+    await pool.connect()
+    const request = pool.request()
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`La consulta SQL excedió el timeout de ${config.dataFabricTimeoutMs} ms.`))
+      }, config.dataFabricTimeoutMs)
+    })
+
+    const result = await Promise.race([request.query(sqlQuery), timeoutPromise])
+    const records = (result.recordset ?? []) as QueryRow[]
+    return records.slice(0, config.dataFabricMaxRows)
+  } finally {
+    await pool.close()
+  }
+}
+
+function summarizeRows(rows: QueryRow[]) {
+  if (!rows.length) return '[]'
+  return JSON.stringify(rows)
+}
+
+async function answerWithData(
+  config: ProxyConfig,
+  question: string,
+  sqlQuery: string,
+  rows: QueryRow[],
+) {
+  const rowsSummary = summarizeRows(rows)
+
+  const systemPrompt = [
+    'Eres un asesor financiero y debes responder solo con base en los datos SQL entregados.',
+    'Si no hay datos suficientes, dilo claramente y sugiere qué dato faltaría.',
+    'Responde en español de forma clara y accionable.',
+  ].join('\n\n')
+
+  const userPrompt = [
+    `Pregunta del usuario: ${question}`,
+    `SQL ejecutado: ${sqlQuery}`,
+    `Filas resultantes (JSON): ${rowsSummary}`,
+    'Genera una respuesta final para el usuario.',
+  ].join('\n\n')
+
+  return completeWithAI(
+    config,
+    [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
+    config.answerModel,
+  )
+}
+
+async function handleDirectChat(
+  config: ProxyConfig,
+  parsed: IncomingBody,
+  messages: Array<{ role: ChatRole; content: string }>,
+) {
+  const model = resolveModel(parsed.model, config.defaultModel)
+  const message = await completeWithAI(config, messages, model)
+  return { message }
+}
+
+async function handleDataFabricAgentFlow(config: ProxyConfig, messages: Array<{ role: ChatRole; content: string }>) {
+  const question = getLastUserQuestion(messages)
+  const sqlQuery = await generateSqlFromQuestion(config, question)
+  const rows = await executeSqlQuery(config, sqlQuery)
+  const message = await answerWithData(config, question, sqlQuery, rows)
+
+  return {
+    message,
+    meta: {
+      sql: sqlQuery,
+      rows: rows.length,
+      source: 'data-fabric',
+    },
+  }
+}
+
 async function getUpstreamErrorDetail(response: Response) {
   try {
     const payload = (await response.json()) as UpstreamErrorPayload
@@ -277,41 +568,24 @@ export async function handler(event: LambdaEvent): Promise<LambdaResult> {
     return jsonResponse(405, { error: 'Método no permitido.' }, allowedOrigin)
   }
 
-  const { apiUrl, apiKey, authHeader, defaultModel, provider } = getConfig()
+  const config = getConfig()
 
-  if (!apiUrl) {
+  if (!config.apiUrl) {
     return jsonResponse(500, { error: 'Falta configurar AI_API_URL.' }, allowedOrigin)
   }
 
   try {
     const parsed = JSON.parse(event.body ?? '{}') as IncomingBody
     const messages = resolveIncomingMessages(parsed)
-    const model = resolveModel(parsed.model, defaultModel)
-    const requestBody = buildRequestBody(provider, messages, model)
-    const headers = buildHeaders(provider, authHeader, apiKey)
+    const useDataFabricFlow = Boolean(config.dataFabricConnectionString || hasServicePrincipalConfig(config))
 
-    const upstreamResponse = await requestUpstream(apiUrl, headers, requestBody)
-
-    if (!upstreamResponse.ok) {
-      const detail = await getUpstreamErrorDetail(upstreamResponse)
-      const hint =
-        upstreamResponse.status === 429
-          ? 'Revisa cuotas/rate limits en Gemini y confirma billing habilitado.'
-          : undefined
-
-      return jsonResponse(
-        upstreamResponse.status,
-        {
-          error: detail,
-          ...(hint ? { hint } : {}),
-        },
-        allowedOrigin,
-      )
+    if (!useDataFabricFlow) {
+      const directResult = await handleDirectChat(config, parsed, messages)
+      return jsonResponse(200, directResult, allowedOrigin)
     }
 
-    const payload = (await upstreamResponse.json()) as UpstreamResponse
-    const message = resolveAssistantText(payload)
-    return jsonResponse(200, { message }, allowedOrigin)
+    const dataFabricResult = await handleDataFabricAgentFlow(config, messages)
+    return jsonResponse(200, dataFabricResult, allowedOrigin)
   } catch (error) {
     const safeMessage = error instanceof Error ? error.message : 'Error inesperado del proxy.'
     return jsonResponse(400, { error: safeMessage }, allowedOrigin)

@@ -1,6 +1,10 @@
 # Backend Proxy AWS Lambda (TypeScript)
 
-Este proxy permite proteger la API key del proveedor de IA y exponer un endpoint HTTP para el frontend.
+Este proxy protege la API key del proveedor de IA y ahora soporta un flujo de agente con Data Fabric:
+
+1. IA convierte pregunta del usuario a SQL.
+2. Lambda ejecuta SQL en Microsoft Fabric.
+3. Lambda envía resultados a la IA para generar la respuesta final.
 
 ## Arquitectura recomendada
 
@@ -16,6 +20,23 @@ Este proxy permite proteger la API key del proveedor de IA y exponer un endpoint
 - `AI_AUTH_HEADER` (opcional): por defecto `Authorization`.
 - `AI_PROVIDER` (opcional): `openai-compatible` (default) o `gemini`.
 - `ALLOWED_ORIGIN` (opcional): origen permitido para CORS, por ejemplo `https://tudominio.com`.
+- `AI_SQL_MODEL` (opcional): modelo para etapa pregunta->SQL.
+- `AI_ANSWER_MODEL` (opcional): modelo para etapa resultados->respuesta final.
+- `DATA_FABRIC_CONNECTION_STRING` (opcional/recomendado): cadena de conexión SQL de Microsoft Fabric.
+- `DATA_FABRIC_SERVER` (opcional): host de Fabric Warehouse, por ejemplo `xxxx.datawarehouse.fabric.microsoft.com`.
+- `DATA_FABRIC_DATABASE` (opcional): nombre de base de datos/warehouse a consultar.
+- `AZURE_TENANT_ID` (opcional): tenant Entra ID para Service Principal.
+- `AZURE_CLIENT_ID` (opcional): Application (client) ID de App Registration.
+- `AZURE_CLIENT_SECRET` (opcional): client secret de App Registration.
+- `ONELAKE_WORKSPACE_NAME` (opcional): fallback para `DATA_FABRIC_DATABASE`.
+- `DATA_FABRIC_SCHEMA_HINT` (opcional): contexto de tablas/columnas para mejorar SQL generado.
+- `DATA_FABRIC_MAX_ROWS` (opcional): límite de filas retornadas al prompt final, default `100`.
+- `DATA_FABRIC_TIMEOUT_SECONDS` (opcional): timeout de consulta SQL, default `30`.
+
+### Modos de conexión a Data Fabric
+
+- Modo 1 (cadena completa): usa `DATA_FABRIC_CONNECTION_STRING`.
+- Modo 2 (App Registration): usa `DATA_FABRIC_SERVER` + `DATA_FABRIC_DATABASE` + `AZURE_TENANT_ID` + `AZURE_CLIENT_ID` + `AZURE_CLIENT_SECRET`.
 
 ### Ejemplo para Google Gemini
 
@@ -26,6 +47,33 @@ Este proxy permite proteger la API key del proveedor de IA y exponer un endpoint
 - `AI_MODEL=` (vacío, porque ya va en la URL)
 - `ALLOWED_ORIGIN=https://tu-dominio-frontend.com`
 
+### Ejemplo para flujo Data Fabric
+
+- `AI_PROVIDER=gemini`
+- `AI_API_URL=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`
+- `AI_API_KEY=<TU_GEMINI_API_KEY>`
+- `AI_AUTH_HEADER=x-goog-api-key`
+- `DATA_FABRIC_CONNECTION_STRING=Server=tcp:<server>.datawarehouse.fabric.microsoft.com,1433;Database=<db>;User ID=<user>;Password=<password>;Encrypt=true;TrustServerCertificate=false;`
+- `DATA_FABRIC_SCHEMA_HINT=Tabla Ventas(fecha, monto, categoria), Tabla Clientes(id, segmento)`
+- `DATA_FABRIC_MAX_ROWS=100`
+- `DATA_FABRIC_TIMEOUT_SECONDS=30`
+
+### Ejemplo para flujo Data Fabric con App Registration (sin connection string)
+
+- `AI_PROVIDER=gemini`
+- `AI_API_URL=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`
+- `AI_API_KEY=<TU_GEMINI_API_KEY>`
+- `AI_AUTH_HEADER=x-goog-api-key`
+- `DATA_FABRIC_SERVER=xxxxxx-xxxxxxxx.datawarehouse.fabric.microsoft.com`
+- `DATA_FABRIC_DATABASE=<NOMBRE_WAREHOUSE_O_DATABASE>`
+- `AZURE_TENANT_ID=<tenant-id>`
+- `AZURE_CLIENT_ID=<app-client-id>`
+- `AZURE_CLIENT_SECRET=<client-secret>`
+- `ONELAKE_WORKSPACE_NAME=Fibot` (opcional, fallback para database)
+- `DATA_FABRIC_SCHEMA_HINT=Tabla Ventas(fecha, monto, categoria), Tabla Clientes(id, segmento)`
+- `DATA_FABRIC_MAX_ROWS=100`
+- `DATA_FABRIC_TIMEOUT_SECONDS=30`
+
 ## Compilar
 
 Desde la raíz del proyecto:
@@ -33,6 +81,8 @@ Desde la raíz del proyecto:
 ```bash
 npm run build:proxy
 ```
+
+> Incluye `mssql` en el paquete de Lambda para poder ejecutar consultas en Fabric.
 
 Salida compilada:
 
