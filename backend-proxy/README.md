@@ -91,8 +91,10 @@ Salida compilada:
 ## Empaquetar para Lambda
 
 ```bash
-Compress-Archive -Path backend-proxy/dist/* -DestinationPath backend-proxy/lambda.zip -Force
+npm run package:proxy
 ```
+
+Este comando genera `backend-proxy/lambda.zip` incluyendo `index.js` y dependencias runtime (`mssql` y transitivas), evitando errores como `Cannot find module 'mssql'`.
 
 ## Configuración correcta de Lambda
 
@@ -152,7 +154,7 @@ Cada despliegue nuevo:
 
 ```bash
 npm run build:proxy
-Compress-Archive -Path backend-proxy/dist/* -DestinationPath backend-proxy/lambda.zip -Force
+npm run package:proxy
 aws lambda update-function-code --function-name fibot-ai-proxy --zip-file fileb://backend-proxy/lambda.zip
 ```
 

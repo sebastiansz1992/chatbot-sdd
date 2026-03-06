@@ -1,0 +1,419 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.handler = handler;
+const mssql_1 = __importDefault(require("mssql"));
+const ALLOWED_ROLES = new Set(['system', 'user', 'assistant']);
+const DANGEROUS_SQL_KEYWORDS = [
+    /\binsert\b/i,
+    /\bupdate\b/i,
+    /\bdelete\b/i,
+    /\bdrop\b/i,
+    /\balter\b/i,
+    /\btruncate\b/i,
+    /\bcreate\b/i,
+    /\bmerge\b/i,
+    /\bgrant\b/i,
+    /\brevoke\b/i,
+    /\bexec\b/i,
+    /\bexecute\b/i,
+];
+function resolveProvider() {
+    const configured = process.env.AI_PROVIDER?.trim().toLowerCase();
+    if (configured === 'gemini')
+        return 'gemini';
+    return 'openai-compatible';
+}
+function jsonResponse(statusCode, body, allowedOrigin) {
+    return {
+        statusCode,
+        headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': allowedOrigin,
+            'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+            'Access-Control-Allow-Methods': 'POST,OPTIONS',
+        },
+        body: JSON.stringify(body),
+    };
+}
+function sanitizeMessages(value) {
+    if (!Array.isArray(value)) {
+        throw new TypeError('messages debe ser un arreglo.');
+    }
+    const sanitized = value
+        .filter((item) => item && typeof item === 'object')
+        .map((item) => {
+        const role = item.role;
+        const content = item.content;
+        if (typeof role !== 'string' || !ALLOWED_ROLES.has(role)) {
+            throw new TypeError('Cada mensaje debe incluir un role válido.');
+        }
+        if (typeof content !== 'string' || !content.trim()) {
+            throw new TypeError('Cada mensaje debe incluir content no vacío.');
+        }
+        return {
+            role: role,
+            content: content.trim(),
+        };
+    });
+    if (!sanitized.length) {
+        throw new TypeError('Debe enviarse al menos un mensaje.');
+    }
+    return sanitized;
+}
+function sanitizeGeminiContents(value) {
+    if (!Array.isArray(value)) {
+        throw new TypeError('contents debe ser un arreglo.');
+    }
+    const normalized = value
+        .filter((item) => item && typeof item === 'object')
+        .map((item) => {
+        const role = item.role;
+        const firstPart = Array.isArray(item.parts) ? item.parts[0] : undefined;
+        const text = firstPart?.text;
+        if (typeof role !== 'string' || (role !== 'user' && role !== 'model')) {
+            throw new TypeError('Cada item en contents debe incluir role user o model.');
+        }
+        if (typeof text !== 'string' || !text.trim()) {
+            throw new TypeError('Cada item en contents debe incluir parts[0].text no vacío.');
+        }
+        return {
+            role: role === 'model' ? 'assistant' : 'user',
+            content: text.trim(),
+        };
+    });
+    if (!normalized.length) {
+        throw new TypeError('Debe enviarse al menos un elemento en contents.');
+    }
+    return normalized;
+}
+function resolveIncomingMessages(parsed) {
+    if (Array.isArray(parsed.messages)) {
+        return sanitizeMessages(parsed.messages);
+    }
+    if (Array.isArray(parsed.contents)) {
+        return sanitizeGeminiContents(parsed.contents);
+    }
+    throw new TypeError('Debes enviar messages o contents en el body.');
+}
+function resolveAssistantText(payload) {
+    if (payload.content?.trim())
+        return payload.content.trim();
+    if (payload.message?.trim())
+        return payload.message.trim();
+    if (payload.output_text?.trim())
+        return payload.output_text.trim();
+    const choiceText = payload.choices?.[0]?.message?.content?.trim();
+    if (choiceText)
+        return choiceText;
+    const geminiText = payload.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    if (geminiText)
+        return geminiText;
+    throw new Error('El proveedor IA no devolvió contenido legible.');
+}
+function mapMessagesForGemini(messages) {
+    const systemMessages = messages.filter((message) => message.role === 'system');
+    const conversationMessages = messages.filter((message) => message.role !== 'system');
+    const contents = conversationMessages.map((message) => ({
+        role: message.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: message.content }],
+    }));
+    return {
+        ...(systemMessages.length
+            ? {
+                systemInstruction: {
+                    parts: [{ text: systemMessages.map((message) => message.content).join('\n') }],
+                },
+            }
+            : {}),
+        contents,
+    };
+}
+function parsePositiveInt(value, fallback) {
+    if (!value)
+        return fallback;
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0)
+        return fallback;
+    return parsed;
+}
+function getConfig() {
+    return {
+        apiUrl: process.env.AI_API_URL?.trim(),
+        apiKey: process.env.AI_API_KEY?.trim() ?? '',
+        authHeader: process.env.AI_AUTH_HEADER?.trim() || 'Authorization',
+        defaultModel: process.env.AI_MODEL?.trim() ?? '',
+        sqlModel: process.env.AI_SQL_MODEL?.trim() ?? process.env.AI_MODEL?.trim() ?? '',
+        answerModel: process.env.AI_ANSWER_MODEL?.trim() ?? process.env.AI_MODEL?.trim() ?? '',
+        provider: resolveProvider(),
+        dataFabricConnectionString: process.env.DATA_FABRIC_CONNECTION_STRING?.trim() ?? '',
+        dataFabricServer: process.env.DATA_FABRIC_SERVER?.trim() ?? '',
+        dataFabricDatabase: process.env.DATA_FABRIC_DATABASE?.trim() ?? process.env.ONELAKE_WORKSPACE_NAME?.trim() ?? '',
+        azureTenantId: process.env.AZURE_TENANT_ID?.trim() ?? '',
+        azureClientId: process.env.AZURE_CLIENT_ID?.trim() ?? '',
+        azureClientSecret: process.env.AZURE_CLIENT_SECRET?.trim() ?? '',
+        dataFabricSchemaHint: process.env.DATA_FABRIC_SCHEMA_HINT?.trim() ?? '',
+        dataFabricMaxRows: parsePositiveInt(process.env.DATA_FABRIC_MAX_ROWS, 100),
+        dataFabricTimeoutMs: parsePositiveInt(process.env.DATA_FABRIC_TIMEOUT_SECONDS, 30) * 1000,
+    };
+}
+function normalizeFabricServer(server) {
+    const trimmed = server.trim();
+    if (!trimmed)
+        return '';
+    const noProtocol = trimmed.replace(/^tcp:/i, '').replace(/^https?:\/\//i, '');
+    const noPort = noProtocol.replace(/:\d+$/, '');
+    return noPort.replace(/\/$/, '');
+}
+function hasServicePrincipalConfig(config) {
+    return Boolean(config.dataFabricServer &&
+        config.dataFabricDatabase &&
+        config.azureTenantId &&
+        config.azureClientId &&
+        config.azureClientSecret);
+}
+function resolveDataFabricPoolConfig(config) {
+    if (config.dataFabricConnectionString) {
+        return config.dataFabricConnectionString;
+    }
+    if (!hasServicePrincipalConfig(config)) {
+        throw new Error('Falta configuración de Data Fabric. Define DATA_FABRIC_CONNECTION_STRING o usa DATA_FABRIC_SERVER, DATA_FABRIC_DATABASE, AZURE_TENANT_ID, AZURE_CLIENT_ID y AZURE_CLIENT_SECRET.');
+    }
+    return {
+        server: normalizeFabricServer(config.dataFabricServer),
+        database: config.dataFabricDatabase,
+        port: 1433,
+        options: {
+            encrypt: true,
+            trustServerCertificate: false,
+        },
+        authentication: {
+            type: 'azure-active-directory-service-principal-secret',
+            options: {
+                tenantId: config.azureTenantId,
+                clientId: config.azureClientId,
+                clientSecret: config.azureClientSecret,
+            },
+        },
+    };
+}
+function resolveModel(inputModel, defaultModel) {
+    if (typeof inputModel === 'string' && inputModel.trim())
+        return inputModel.trim();
+    return defaultModel;
+}
+function buildRequestBody(provider, messages, model) {
+    if (provider === 'gemini') {
+        return {
+            ...mapMessagesForGemini(messages),
+            ...(model ? { model } : {}),
+        };
+    }
+    return {
+        messages,
+        ...(model ? { model } : {}),
+    };
+}
+function buildHeaders(provider, authHeader, apiKey) {
+    const headers = {
+        'Content-Type': 'application/json',
+    };
+    if (!apiKey)
+        return headers;
+    if (provider === 'gemini') {
+        headers[authHeader] = apiKey;
+        return headers;
+    }
+    headers[authHeader] = apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`;
+    return headers;
+}
+async function requestUpstream(apiUrl, headers, body) {
+    return fetch(apiUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+    });
+}
+async function completeWithAI(config, messages, model) {
+    if (!config.apiUrl) {
+        throw new Error('Falta configurar AI_API_URL.');
+    }
+    const requestBody = buildRequestBody(config.provider, messages, model);
+    const headers = buildHeaders(config.provider, config.authHeader, config.apiKey);
+    const upstreamResponse = await requestUpstream(config.apiUrl, headers, requestBody);
+    if (!upstreamResponse.ok) {
+        const detail = await getUpstreamErrorDetail(upstreamResponse);
+        const hint = upstreamResponse.status === 429
+            ? 'Revisa cuotas/rate limits en Gemini y confirma billing habilitado.'
+            : undefined;
+        const reason = hint ? `${detail} ${hint}` : detail;
+        throw new Error(reason);
+    }
+    const payload = (await upstreamResponse.json());
+    return resolveAssistantText(payload);
+}
+function getLastUserQuestion(messages) {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        if (messages[index].role === 'user') {
+            return messages[index].content;
+        }
+    }
+    throw new Error('No se encontró una pregunta del usuario para convertir a SQL.');
+}
+function unwrapCodeFence(value) {
+    const fencedRegex = /```(?:sql)?\s*([\s\S]*?)```/i;
+    const fenced = fencedRegex.exec(value);
+    if (fenced?.[1])
+        return fenced[1].trim();
+    return value.trim();
+}
+function extractSqlCandidate(raw) {
+    const unwrapped = unwrapCodeFence(raw);
+    const singleLine = unwrapped
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .join(' ');
+    if (!singleLine) {
+        throw new Error('La IA no devolvió SQL utilizable.');
+    }
+    return singleLine.replace(/;\s*$/, '');
+}
+function validateReadOnlySql(sqlQuery) {
+    const normalized = sqlQuery.trim();
+    const lower = normalized.toLowerCase();
+    if (!(lower.startsWith('select') || lower.startsWith('with'))) {
+        throw new Error('Solo se permiten consultas de lectura (SELECT / WITH).');
+    }
+    if (DANGEROUS_SQL_KEYWORDS.some((pattern) => pattern.test(lower))) {
+        throw new Error('La consulta generada incluye comandos no permitidos para solo lectura.');
+    }
+    if (lower.includes('--') || lower.includes('/*') || lower.includes('*/')) {
+        throw new Error('La consulta generada contiene comentarios SQL no permitidos.');
+    }
+    return normalized;
+}
+async function generateSqlFromQuestion(config, question) {
+    const systemPrompt = [
+        'Eres un asistente que convierte preguntas de negocio a SQL T-SQL para Microsoft Fabric Warehouse.',
+        'Devuelve solo una consulta SQL de lectura (SELECT o WITH).',
+        'No uses INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, MERGE, EXEC ni múltiples sentencias.',
+        'No incluyas explicación ni markdown.',
+        config.dataFabricSchemaHint
+            ? `Contexto de esquema/tablas disponible:\n${config.dataFabricSchemaHint}`
+            : 'Si no conoces columnas exactas, usa nombres razonables y consulta conservadora.',
+    ].join('\n\n');
+    const sqlDraft = await completeWithAI(config, [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: question },
+    ], config.sqlModel);
+    const sqlCandidate = extractSqlCandidate(sqlDraft);
+    return validateReadOnlySql(sqlCandidate);
+}
+async function executeSqlQuery(config, sqlQuery) {
+    const fabricPoolConfig = resolveDataFabricPoolConfig(config);
+    const pool = new mssql_1.default.ConnectionPool(fabricPoolConfig);
+    try {
+        await pool.connect();
+        const request = pool.request();
+        const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => {
+                reject(new Error(`La consulta SQL excedió el timeout de ${config.dataFabricTimeoutMs} ms.`));
+            }, config.dataFabricTimeoutMs);
+        });
+        const result = await Promise.race([request.query(sqlQuery), timeoutPromise]);
+        const records = (result.recordset ?? []);
+        return records.slice(0, config.dataFabricMaxRows);
+    }
+    finally {
+        await pool.close();
+    }
+}
+function summarizeRows(rows) {
+    if (!rows.length)
+        return '[]';
+    return JSON.stringify(rows);
+}
+async function answerWithData(config, question, sqlQuery, rows) {
+    const rowsSummary = summarizeRows(rows);
+    const systemPrompt = [
+        'Eres un asesor financiero y debes responder solo con base en los datos SQL entregados.',
+        'Si no hay datos suficientes, dilo claramente y sugiere qué dato faltaría.',
+        'Responde en español de forma clara y accionable.',
+    ].join('\n\n');
+    const userPrompt = [
+        `Pregunta del usuario: ${question}`,
+        `SQL ejecutado: ${sqlQuery}`,
+        `Filas resultantes (JSON): ${rowsSummary}`,
+        'Genera una respuesta final para el usuario.',
+    ].join('\n\n');
+    return completeWithAI(config, [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+    ], config.answerModel);
+}
+async function handleDirectChat(config, parsed, messages) {
+    const model = resolveModel(parsed.model, config.defaultModel);
+    const message = await completeWithAI(config, messages, model);
+    return { message };
+}
+async function handleDataFabricAgentFlow(config, messages) {
+    const question = getLastUserQuestion(messages);
+    const sqlQuery = await generateSqlFromQuestion(config, question);
+    const rows = await executeSqlQuery(config, sqlQuery);
+    const message = await answerWithData(config, question, sqlQuery, rows);
+    return {
+        message,
+        meta: {
+            sql: sqlQuery,
+            rows: rows.length,
+            source: 'data-fabric',
+        },
+    };
+}
+async function getUpstreamErrorDetail(response) {
+    try {
+        const payload = (await response.json());
+        const message = payload.error?.message?.trim();
+        const status = payload.error?.status?.trim();
+        if (message && status)
+            return `${status}: ${message}`;
+        if (message)
+            return message;
+    }
+    catch {
+        // Fallback to generic status below.
+    }
+    return `El proveedor IA respondió con estado ${response.status}.`;
+}
+async function handler(event) {
+    const allowedOrigin = process.env.ALLOWED_ORIGIN?.trim() || '*';
+    const method = event.httpMethod ?? 'POST';
+    if (method === 'OPTIONS') {
+        return jsonResponse(204, {}, allowedOrigin);
+    }
+    if (method !== 'POST') {
+        return jsonResponse(405, { error: 'Método no permitido.' }, allowedOrigin);
+    }
+    const config = getConfig();
+    if (!config.apiUrl) {
+        return jsonResponse(500, { error: 'Falta configurar AI_API_URL.' }, allowedOrigin);
+    }
+    try {
+        const parsed = JSON.parse(event.body ?? '{}');
+        const messages = resolveIncomingMessages(parsed);
+        const useDataFabricFlow = Boolean(config.dataFabricConnectionString || hasServicePrincipalConfig(config));
+        if (!useDataFabricFlow) {
+            const directResult = await handleDirectChat(config, parsed, messages);
+            return jsonResponse(200, directResult, allowedOrigin);
+        }
+        const dataFabricResult = await handleDataFabricAgentFlow(config, messages);
+        return jsonResponse(200, dataFabricResult, allowedOrigin);
+    }
+    catch (error) {
+        const safeMessage = error instanceof Error ? error.message : 'Error inesperado del proxy.';
+        return jsonResponse(400, { error: safeMessage }, allowedOrigin);
+    }
+}
