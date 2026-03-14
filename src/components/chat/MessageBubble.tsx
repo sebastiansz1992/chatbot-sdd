@@ -1,4 +1,5 @@
 import type { ChatMessage } from '../../types/ui'
+import DOMPurify from 'dompurify'
 
 type MessageBubbleProps = {
   message: ChatMessage
@@ -6,6 +7,11 @@ type MessageBubbleProps = {
 
 export function MessageBubble({ message }: Readonly<MessageBubbleProps>) {
   const isAssistant = message.role === 'assistant'
+  const assistantHtml = isAssistant
+    ? DOMPurify.sanitize(message.content, {
+        USE_PROFILES: { html: true },
+      })
+    : ''
 
   return (
     <article
@@ -16,7 +22,11 @@ export function MessageBubble({ message }: Readonly<MessageBubbleProps>) {
       }`}
       data-testid={`message-${message.role}`}
     >
-      <p className="whitespace-pre-wrap break-words">{message.content}</p>
+      {isAssistant ? (
+        <div className="prose prose-sm max-w-none break-words dark:prose-invert" dangerouslySetInnerHTML={{ __html: assistantHtml }} />
+      ) : (
+        <p className="whitespace-pre-wrap break-words">{message.content}</p>
+      )}
     </article>
   )
 }

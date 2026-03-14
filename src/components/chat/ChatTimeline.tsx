@@ -3,14 +3,33 @@ import { MessageBubble } from './MessageBubble'
 
 type ChatTimelineProps = {
   messages: ChatMessage[]
+  isAssistantThinking?: boolean
 }
 
-export function ChatTimeline({ messages }: Readonly<ChatTimelineProps>) {
+export function ChatTimeline({ messages, isAssistantThinking = false }: Readonly<ChatTimelineProps>) {
   return (
     <section className="chat-scroll flex-1 space-y-4 overflow-y-auto px-3 py-4 sm:px-5 sm:py-5 lg:px-8 lg:py-6" aria-label="Conversación">
       {messages.map((message) => (
         <MessageBubble key={message.id} message={message} />
       ))}
+
+      {isAssistantThinking ? (
+        <article
+          className="w-full max-w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-700 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 sm:max-w-3xl"
+          aria-live="polite"
+          aria-label="El asistente está pensando"
+          data-testid="assistant-thinking"
+        >
+          <div className="inline-flex items-center gap-2">
+            <span>Asistente está pensando</span>
+            <span className="inline-flex gap-1" aria-hidden="true">
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.2s] dark:bg-slate-500" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.1s] dark:bg-slate-500" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 dark:bg-slate-500" />
+            </span>
+          </div>
+        </article>
+      ) : null}
     </section>
   )
 }

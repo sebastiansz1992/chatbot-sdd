@@ -16,6 +16,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "dompurify": "^3.3.3",
     "mssql": "^12.2.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

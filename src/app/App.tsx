@@ -59,7 +59,7 @@ export default function App() {
         />
       }
     >
-      <ChatTimeline messages={messages} />
+      <ChatTimeline messages={messages} isAssistantThinking={isSending} />
       <div className="border-t border-slate-200 bg-slate-100 px-3 pt-3 dark:border-slate-800 dark:bg-slate-950 sm:px-4 sm:pt-4">
         <ChatComposer
           value={draftMessage}
