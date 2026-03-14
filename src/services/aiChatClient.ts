@@ -46,9 +46,16 @@ function isLocalErrorAssistantMessage(role: ChatRole, content: string) {
   return LOCAL_ERROR_PATTERNS.some((pattern) => pattern.test(content))
 }
 
+function stripHtmlTags(value: string) {
+  return value.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
 function mapToRequestMessages(messages: ChatMessage[]) {
   return messages
-    .map(({ role, content }) => ({ role, content: content.trim() }))
+    .map(({ role, content }) => ({
+      role,
+      content: role === 'assistant' ? stripHtmlTags(content) : content.trim(),
+    }))
     .filter(({ content }) => content.length > 0)
     .filter(({ role, content }) => !isLocalErrorAssistantMessage(role, content))
 }
@@ -91,15 +98,17 @@ export async function requestAssistantReply(messages: ChatMessage[]) {
   })
 
   if (!response.ok) {
+    let detail: string | undefined
+
     try {
       const payload = (await response.json()) as ChatErrorResponse
-      const detail = payload.error?.trim() || payload.message?.trim()
-
-      if (detail) {
-        throw new Error(detail)
-      }
+      detail = payload.error?.trim() || payload.message?.trim()
     } catch {
       // Fallback to generic status error.
+    }
+
+    if (detail) {
+      throw new Error(detail)
     }
 
     throw new Error(`El servicio de IA respondió con estado ${response.status}.`)

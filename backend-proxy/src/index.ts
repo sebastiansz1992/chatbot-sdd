@@ -690,6 +690,7 @@ async function answerWithData(
     'Si presentas cálculos, usa una tabla HTML con dos columnas: Concepto y Valor.',
     'Si presentas listas, usa <ul> con elementos <li>.',
     'Si el usuario solicita gráficos, genera una imagen usando QuickChart con tipos permitidos: bar, pie o line.',
+    'Está prohibido usar Mermaid o bloques ```.',
     'Cuando generes gráficos, incluye exactamente una etiqueta <img> con src de quickchart.io y estilo width:80%; max-width:500px;.',
     "Ejemplo de gráfico: <img src=\"https://quickchart.io/chart?c={type:'bar',data:{labels:['A','B'],datasets:[{label:'Valor',data:[10,20]}]}}\" style=\"width:80%; max-width:500px;\">",
     'No devuelvas markdown ni bloques de código; solo HTML válido.',
