@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { ChatComposer } from '../components/chat/ChatComposer'
 import { ChatDisclaimer } from '../components/chat/ChatDisclaimer'
 import { ChatTimeline } from '../components/chat/ChatTimeline'
+import { SuggestionChips } from '../components/chat/SuggestionChips'
 import { useChatState } from '../components/chat/useChatState'
 import { AppShell } from '../components/layout/AppShell'
 import { TopStatusBar } from '../components/layout/TopStatusBar'
@@ -103,6 +104,13 @@ export default function App() {
         exportTableLabel={t.exportTableCsv}
       />
       <div className="border-t border-slate-200 bg-slate-100 px-3 pt-3 dark:border-slate-800 dark:bg-slate-950 sm:px-4 sm:pt-4">
+        {messages.length === 1 && (
+          <SuggestionChips
+            suggestions={t.suggestions}
+            onSelect={(text) => sendMessage(text)}
+            disabled={isSending}
+          />
+        )}
         <ChatComposer
           value={draftMessage}
           onChange={setDraftMessage}

@@ -33,8 +33,8 @@ export function useChatState(welcomeMessage: string, language: Language, errorFa
 
   const canSend = useMemo(() => draftMessage.trim().length > 0 && !isSending, [draftMessage, isSending])
 
-  const sendMessage = async () => {
-    const content = draftMessage.trim()
+  const sendMessage = async (overrideText?: string) => {
+    const content = (overrideText ?? draftMessage).trim()
     if (!content || isSending) return
 
     const userMessage = buildMessage('user', content)
