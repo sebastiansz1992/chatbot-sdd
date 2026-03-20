@@ -6,9 +6,7 @@ import type {
 } from '../types/ui'
 
 export const modelOptions: ModelOption[] = [
-  { id: 'fin-gpt-expert', name: 'FinGPT Expert', provider: 'OpenAI', isSelected: true },
-  { id: 'claude-analyst', name: 'Claude Analyst', provider: 'Anthropic', isSelected: false },
-  { id: 'gemini-quant', name: 'Gemini Quant', provider: 'Google', isSelected: false },
+  { id: 'fin-gpt-expert', name: 'FinGPT Expert', provider: 'FiBot', isSelected: true },
 ]
 
 export const initialMessages: ChatMessage[] = [

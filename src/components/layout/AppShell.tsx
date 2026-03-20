@@ -10,6 +10,11 @@ type AppShellProps = {
   appSubtitle: string
   modelSelectorTitle: string
   modelSelectorAriaLabel: string
+  engineLabel: string
+  capabilityAnalysis: string
+  capabilityCharts: string
+  capabilityExport: string
+  capabilityFabric: string
 }
 
 export function AppShell({
@@ -21,6 +26,11 @@ export function AppShell({
   appSubtitle,
   modelSelectorTitle,
   modelSelectorAriaLabel,
+  engineLabel,
+  capabilityAnalysis,
+  capabilityCharts,
+  capabilityExport,
+  capabilityFabric,
 }: Readonly<AppShellProps>) {
   return (
     <div className="relative flex min-h-screen w-full flex-col bg-slate-100 dark:bg-slate-950 md:h-screen md:flex-row">
@@ -33,6 +43,11 @@ export function AppShell({
           appSubtitle={appSubtitle}
           modelSelectorTitle={modelSelectorTitle}
           modelSelectorAriaLabel={modelSelectorAriaLabel}
+          engineLabel={engineLabel}
+          capabilityAnalysis={capabilityAnalysis}
+          capabilityCharts={capabilityCharts}
+          capabilityExport={capabilityExport}
+          capabilityFabric={capabilityFabric}
         />
       </div>
       <button

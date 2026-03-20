@@ -24,6 +24,11 @@ export type Translations = {
   connectionLabel: string
   modelSelectorTitle: string
   modelSelectorAriaLabel: string
+  engineLabel: string
+  capabilityAnalysis: string
+  capabilityCharts: string
+  capabilityExport: string
+  capabilityFabric: string
   exportTableCsv: string
   suggestions: string[]
 }
@@ -56,6 +61,11 @@ export const translations: Record<Language, Translations> = {
     modelSelectorTitle: 'Seleccionar modelo de IA',
     modelSelectorAriaLabel: 'Selector de modelo',
     exportTableCsv: 'Exportar tabla como CSV',
+    engineLabel: 'Motor activo',
+    capabilityAnalysis: 'Análisis financiero',
+    capabilityCharts: 'Gráficos interactivos',
+    capabilityExport: 'Exportación de datos',
+    capabilityFabric: 'Conexión Data Fabric',
     suggestions: [
       'Generar gráficos de Facturación',
       'Costos y gastos',
@@ -88,6 +98,11 @@ export const translations: Record<Language, Translations> = {
     modelSelectorTitle: 'Select AI model',
     modelSelectorAriaLabel: 'Model selector',
     exportTableCsv: 'Export table as CSV',
+    engineLabel: 'Active engine',
+    capabilityAnalysis: 'Financial analysis',
+    capabilityCharts: 'Interactive charts',
+    capabilityExport: 'Data export',
+    capabilityFabric: 'Data Fabric connection',
     suggestions: [
       'Generate Billing charts',
       'Costs and expenses',

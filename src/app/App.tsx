@@ -74,6 +74,11 @@ export default function App() {
       appSubtitle={t.appSubtitle}
       modelSelectorTitle={t.modelSelectorTitle}
       modelSelectorAriaLabel={t.modelSelectorAriaLabel}
+      engineLabel={t.engineLabel}
+      capabilityAnalysis={t.capabilityAnalysis}
+      capabilityCharts={t.capabilityCharts}
+      capabilityExport={t.capabilityExport}
+      capabilityFabric={t.capabilityFabric}
       topBar={
         <TopStatusBar
           encryptionLabel={t.encryptionLabel}
