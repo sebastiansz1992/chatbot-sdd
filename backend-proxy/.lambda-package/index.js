@@ -481,12 +481,24 @@ function summarizeRows(rows) {
         return '[]';
     return JSON.stringify(rows);
 }
-async function answerWithData(config, question, sqlQuery, rows) {
+function resolveLanguage(value) {
+    return value === 'en' ? 'en' : 'es';
+}
+function buildLanguageInstruction(language) {
+    return language === 'en'
+        ? 'Respond exclusively in English, clearly and actionably.'
+        : 'Responde exclusivamente en español de forma clara y accionable.';
+}
+async function answerWithData(config, question, sqlQuery, rows, language) {
     const rowsSummary = summarizeRows(rows);
     const systemPrompt = [
-        'Eres un asesor financiero y debes responder solo con base en los datos SQL entregados.',
-        'Si no hay datos suficientes, dilo claramente y sugiere qué dato faltaría.',
-        'Responde en español de forma clara y accionable.',
+        language === 'en'
+            ? 'You are a financial advisor and must respond only based on the SQL data provided.'
+            : 'Eres un asesor financiero y debes responder solo con base en los datos SQL entregados.',
+        language === 'en'
+            ? 'If there is insufficient data, say so clearly and suggest what information would be needed.'
+            : 'Si no hay datos suficientes, dilo claramente y sugiere qué dato faltaría.',
+        buildLanguageInstruction(language),
         'Responde siempre en HTML y no uses etiquetas de encabezado (h1-h6).',
         'Usa texto en negrita con <strong> para títulos o conceptos clave (bold).',
         'Si presentas cálculos, usa una tabla HTML con dos columnas: Concepto y Valor.',
@@ -508,12 +520,17 @@ async function answerWithData(config, question, sqlQuery, rows) {
         { role: 'user', content: userPrompt },
     ], config.answerModel);
 }
-async function handleDirectChat(config, parsed, messages) {
+function injectLanguageHint(messages, language) {
+    const hint = buildLanguageInstruction(language);
+    return [{ role: 'system', content: hint }, ...messages];
+}
+async function handleDirectChat(config, parsed, messages, language) {
     const model = resolveModel(parsed.model, config.defaultModel);
-    const message = await completeWithAI(config, messages, model);
+    const messagesWithLanguage = injectLanguageHint(messages, language);
+    const message = await completeWithAI(config, messagesWithLanguage, model);
     return { message };
 }
-async function handleDataFabricAgentFlow(config, messages) {
+async function handleDataFabricAgentFlow(config, messages, language) {
     const question = getLastUserQuestion(messages);
     const discoveredSchemaHint = await discoverSchemaHint(config);
     const baseSchemaHint = [config.dataFabricSchemaHint, discoveredSchemaHint].filter(Boolean).join('\n\n').trim();
@@ -532,7 +549,7 @@ async function handleDataFabricAgentFlow(config, messages) {
         sqlQuery = await generateSqlFromQuestion(config, question, mergedRetryHint, firstError);
         rows = await executeSqlQuery(config, sqlQuery);
     }
-    const message = await answerWithData(config, question, sqlQuery, rows);
+    const message = await answerWithData(config, question, sqlQuery, rows, language);
     return {
         message,
         meta: {
@@ -573,12 +590,13 @@ async function handler(event) {
     try {
         const parsed = JSON.parse(event.body ?? '{}');
         const messages = resolveIncomingMessages(parsed);
+        const language = resolveLanguage(parsed.language);
         const useDataFabricFlow = Boolean(config.dataFabricConnectionString || hasServicePrincipalConfig(config));
         if (!useDataFabricFlow) {
-            const directResult = await handleDirectChat(config, parsed, messages);
+            const directResult = await handleDirectChat(config, parsed, messages, language);
             return jsonResponse(200, directResult, allowedOrigin);
         }
-        const dataFabricResult = await handleDataFabricAgentFlow(config, messages);
+        const dataFabricResult = await handleDataFabricAgentFlow(config, messages, language);
         return jsonResponse(200, dataFabricResult, allowedOrigin);
     }
     catch (error) {

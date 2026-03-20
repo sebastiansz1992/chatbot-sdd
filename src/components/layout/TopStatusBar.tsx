@@ -1,32 +1,52 @@
 import { ActiveSessionStatus } from './ActiveSessionStatus'
 import { EncryptionStatusBadge } from './EncryptionStatusBadge'
-import { FiMenu, FiMoon, FiSun, FiX } from 'react-icons/fi'
+import { FiGlobe, FiMenu, FiMoon, FiSun, FiX } from 'react-icons/fi'
+import type { Language } from '../../i18n/translations'
 
 type TopStatusBarProps = {
   encryptionLabel: string
   connectionLabel: string
+  sessionActiveLabel: string
   theme: 'light' | 'dark'
   onToggleTheme: () => void
+  changeThemeLabel: string
+  themeDarkLabel: string
+  themeLightLabel: string
   onToggleSidebar: () => void
   isSidebarOpen: boolean
+  openSidebarLabel: string
+  closeSidebarLabel: string
+  lang: Language
+  onToggleLang: () => void
+  langToggleLabel: string
+  langToggleAriaLabel: string
 }
 
 export function TopStatusBar({
   encryptionLabel,
   connectionLabel,
+  sessionActiveLabel,
   theme,
   onToggleTheme,
+  changeThemeLabel,
+  themeDarkLabel,
+  themeLightLabel,
   onToggleSidebar,
   isSidebarOpen,
+  openSidebarLabel,
+  closeSidebarLabel,
+  onToggleLang,
+  langToggleLabel,
+  langToggleAriaLabel,
 }: Readonly<TopStatusBarProps>) {
   return (
-    <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900 sm:px-6 lg:px-8" aria-label="Estado de sesión y seguridad">
+    <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900 sm:px-6 lg:px-8" aria-label={sessionActiveLabel}>
       <div className="flex items-center gap-2 sm:gap-3">
         <button
           type="button"
           onClick={onToggleSidebar}
           className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-100 text-slate-700 hover:bg-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 md:hidden"
-          aria-label={isSidebarOpen ? 'Cerrar menú lateral' : 'Abrir menú lateral'}
+          aria-label={isSidebarOpen ? closeSidebarLabel : openSidebarLabel}
         >
           {isSidebarOpen ? <FiX aria-hidden="true" /> : <FiMenu aria-hidden="true" />}
         </button>
@@ -35,7 +55,7 @@ export function TopStatusBar({
           type="button"
           onClick={onToggleTheme}
           className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs text-slate-700 hover:bg-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
-          aria-label="Cambiar tema"
+          aria-label={changeThemeLabel}
         >
           <span className="relative inline-flex h-3.5 w-3.5 items-center justify-center" aria-hidden="true">
             <FiSun
@@ -49,11 +69,20 @@ export function TopStatusBar({
               }`}
             />
           </span>
-          {theme === 'dark' ? 'Oscuro' : 'Claro'}
+          {theme === 'dark' ? themeDarkLabel : themeLightLabel}
+        </button>
+        <button
+          type="button"
+          onClick={onToggleLang}
+          className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+          aria-label={langToggleAriaLabel}
+        >
+          <FiGlobe className="h-3.5 w-3.5" aria-hidden="true" />
+          {langToggleLabel}
         </button>
       </div>
-      <div className="text-left sm:text-right" aria-label="Estado de sesión activa">
-        <p className="text-sm font-medium text-slate-700 dark:text-slate-200">Sesión activa</p>
+      <div className="text-left sm:text-right" aria-label={sessionActiveLabel}>
+        <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{sessionActiveLabel}</p>
         <ActiveSessionStatus label={connectionLabel} />
       </div>
     </header>

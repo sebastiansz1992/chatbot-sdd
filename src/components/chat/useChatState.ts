@@ -1,10 +1,7 @@
-import { useMemo, useState } from 'react'
-import { initialMessages } from '../../data/mockData'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChatMessage } from '../../types/ui'
 import { requestAssistantReply } from '../../services/aiChatClient'
-
-const FALLBACK_ERROR_MESSAGE =
-  'No pude responder en este momento. Verifica la conexión con el proveedor de IA e inténtalo de nuevo.'
+import type { Language } from '../../i18n/translations'
 
 function buildMessage(role: ChatMessage['role'], content: string): ChatMessage {
   return {
@@ -15,10 +12,24 @@ function buildMessage(role: ChatMessage['role'], content: string): ChatMessage {
   }
 }
 
-export function useChatState() {
-  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages)
+export function useChatState(welcomeMessage: string, language: Language, errorFallback: string) {
+  const welcomeIdRef = useRef<string>('')
+
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    const msg = buildMessage('assistant', welcomeMessage)
+    welcomeIdRef.current = msg.id
+    return [msg]
+  })
+
   const [draftMessage, setDraftMessage] = useState('')
   const [isSending, setIsSending] = useState(false)
+
+  useEffect(() => {
+    setMessages((prev) => {
+      if (!prev.length || prev[0].id !== welcomeIdRef.current) return prev
+      return [{ ...prev[0], content: welcomeMessage }, ...prev.slice(1)]
+    })
+  }, [welcomeMessage])
 
   const canSend = useMemo(() => draftMessage.trim().length > 0 && !isSending, [draftMessage, isSending])
 
@@ -31,14 +42,13 @@ export function useChatState() {
 
     setMessages(nextMessages)
     setDraftMessage('')
-
     setIsSending(true)
 
     try {
-      const assistantText = await requestAssistantReply(nextMessages)
+      const assistantText = await requestAssistantReply(nextMessages, language)
       setMessages((prev) => [...prev, buildMessage('assistant', assistantText)])
     } catch (error) {
-      const message = error instanceof Error && error.message.trim() ? error.message : FALLBACK_ERROR_MESSAGE
+      const message = error instanceof Error && error.message.trim() ? error.message : errorFallback
       setMessages((prev) => [...prev, buildMessage('assistant', message)])
     } finally {
       setIsSending(false)

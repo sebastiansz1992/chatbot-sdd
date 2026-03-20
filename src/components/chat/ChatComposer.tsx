@@ -6,6 +6,9 @@ type ChatComposerProps = {
   onSend: () => void
   canSend: boolean
   placeholder: string
+  consultingText: string
+  inputAriaLabel: string
+  sendAriaLabel: string
   isSending: boolean
 }
 
@@ -15,6 +18,9 @@ export function ChatComposer({
   onSend,
   canSend,
   placeholder,
+  consultingText,
+  inputAriaLabel,
+  sendAriaLabel,
   isSending,
 }: Readonly<ChatComposerProps>) {
   return (
@@ -31,15 +37,15 @@ export function ChatComposer({
             }
           }}
           className="w-full border-none bg-transparent text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none dark:text-slate-200 dark:placeholder:text-slate-500"
-          placeholder={isSending ? 'Consultando agente de IA...' : placeholder}
-          aria-label="Entrada de chat"
+          placeholder={isSending ? consultingText : placeholder}
+          aria-label={inputAriaLabel}
         />
         <button
           type="button"
           disabled={!canSend}
           onClick={onSend}
           className="rounded-xl bg-blue-500 p-2 text-white disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700"
-          aria-label="Enviar mensaje"
+          aria-label={sendAriaLabel}
         >
           <FiSend />
         </button>

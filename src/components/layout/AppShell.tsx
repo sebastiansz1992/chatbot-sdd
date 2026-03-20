@@ -6,6 +6,10 @@ type AppShellProps = {
   children: ReactNode
   isSidebarOpen: boolean
   onCloseSidebar: () => void
+  closeSidebarLabel: string
+  appSubtitle: string
+  modelSelectorTitle: string
+  modelSelectorAriaLabel: string
 }
 
 export function AppShell({
@@ -13,6 +17,10 @@ export function AppShell({
   children,
   isSidebarOpen,
   onCloseSidebar,
+  closeSidebarLabel,
+  appSubtitle,
+  modelSelectorTitle,
+  modelSelectorAriaLabel,
 }: Readonly<AppShellProps>) {
   return (
     <div className="relative flex min-h-screen w-full flex-col bg-slate-100 dark:bg-slate-950 md:h-screen md:flex-row">
@@ -21,7 +29,11 @@ export function AppShell({
           isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        <Sidebar />
+        <Sidebar
+          appSubtitle={appSubtitle}
+          modelSelectorTitle={modelSelectorTitle}
+          modelSelectorAriaLabel={modelSelectorAriaLabel}
+        />
       </div>
       <button
         type="button"
@@ -29,7 +41,7 @@ export function AppShell({
         className={`fixed inset-0 z-30 bg-slate-950/40 transition-opacity duration-200 md:hidden ${
           isSidebarOpen ? 'opacity-100' : 'pointer-events-none opacity-0'
         }`}
-        aria-label="Cerrar menú lateral"
+        aria-label={closeSidebarLabel}
       />
       <section className="flex min-h-0 min-w-0 flex-1 flex-col">
         {topBar}

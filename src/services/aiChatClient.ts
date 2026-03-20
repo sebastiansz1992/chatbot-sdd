@@ -1,9 +1,11 @@
 import type { ChatMessage } from '../types/ui'
+import type { Language } from '../i18n/translations'
 
 type ChatRole = 'system' | 'user' | 'assistant'
 
 type ChatCompletionRequest = {
   model?: string
+  language?: Language
   messages: Array<{ role: ChatRole; content: string }>
 }
 
@@ -35,6 +37,7 @@ function getApiConfig() {
 const LOCAL_ERROR_PATTERNS = [
   /^failed to fetch$/i,
   /^no pude responder en este momento/i,
+  /^i could not respond at this time/i,
   /^el servicio de ia respondio con estado/i,
   /^resource_exhausted:/i,
   /^metodo no permitido/i,
@@ -47,7 +50,7 @@ function isLocalErrorAssistantMessage(role: ChatRole, content: string) {
 }
 
 function stripHtmlTags(value: string) {
-  return value.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+  return value.replaceAll(/<[^>]*>/g, ' ').replaceAll(/\s+/g, ' ').trim()
 }
 
 function mapToRequestMessages(messages: ChatMessage[]) {
@@ -71,7 +74,7 @@ function resolveAssistantText(payload: ChatCompletionResponse) {
   throw new Error('La respuesta de IA no contiene contenido legible.')
 }
 
-export async function requestAssistantReply(messages: ChatMessage[]) {
+export async function requestAssistantReply(messages: ChatMessage[], language: Language) {
   const { apiUrl, apiKey, model, authHeader } = getApiConfig()
 
   if (!apiUrl) {
@@ -80,6 +83,7 @@ export async function requestAssistantReply(messages: ChatMessage[]) {
 
   const body: ChatCompletionRequest = {
     messages: mapToRequestMessages(messages),
+    language,
     ...(model ? { model } : {}),
   }
 

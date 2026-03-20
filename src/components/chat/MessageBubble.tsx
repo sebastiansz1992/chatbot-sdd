@@ -1,9 +1,14 @@
+import { useEffect, useRef, useState } from 'react'
 import type { ChatMessage } from '../../types/ui'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
+import { FiDownload } from 'react-icons/fi'
+import { downloadCsv, quickChartSrcToRows, tableElementToRows } from '../../utils/exportData'
 
 type MessageBubbleProps = {
   message: ChatMessage
+  exportTableLabel: string
+  exportChartLabel: string
 }
 
 marked.setOptions({ gfm: true, breaks: true })
@@ -57,7 +62,7 @@ function buildQuickChartFromMermaidBlock(block: string) {
 }
 
 function replaceMermaidWithQuickChart(raw: string) {
-  return raw.replace(/```mermaid\s*([\s\S]*?)```/gi, (_, block: string) => {
+  return raw.replaceAll(/```mermaid\s*([\s\S]*?)```/gi, (_, block: string) => {
     const quickChartHtml = buildQuickChartFromMermaidBlock(block)
     return quickChartHtml || ''
   })
@@ -74,13 +79,48 @@ function renderAssistantMessage(raw: string) {
   return typeof rendered === 'string' ? rendered : withCharts
 }
 
-export function MessageBubble({ message }: Readonly<MessageBubbleProps>) {
+export function MessageBubble({ message, exportTableLabel, exportChartLabel }: Readonly<MessageBubbleProps>) {
   const isAssistant = message.role === 'assistant'
   const assistantHtml = isAssistant
     ? DOMPurify.sanitize(renderAssistantMessage(message.content), {
         USE_PROFILES: { html: true },
       })
     : ''
+
+  const contentRef = useRef<HTMLDivElement>(null)
+  const [hasTables, setHasTables] = useState(false)
+  const [hasCharts, setHasCharts] = useState(false)
+
+  useEffect(() => {
+    if (!contentRef.current) return
+    setHasTables(contentRef.current.querySelectorAll('table').length > 0)
+    setHasCharts(contentRef.current.querySelectorAll('img[src*="quickchart.io"]').length > 0)
+  }, [assistantHtml])
+
+  const handleExportTables = () => {
+    if (!contentRef.current) return
+    const tables = Array.from(contentRef.current.querySelectorAll('table'))
+    const allRows: string[][] = []
+    tables.forEach((table, i) => {
+      if (i > 0) allRows.push([])
+      allRows.push(...tableElementToRows(table))
+    })
+    downloadCsv('fibot-tabla.csv', allRows)
+  }
+
+  const handleExportCharts = () => {
+    if (!contentRef.current) return
+    const imgs = Array.from(contentRef.current.querySelectorAll('img[src*="quickchart.io"]'))
+    const allRows: string[][] = []
+    imgs.forEach((img, i) => {
+      const rows = quickChartSrcToRows((img as HTMLImageElement).src)
+      if (rows) {
+        if (i > 0) allRows.push([])
+        allRows.push(...rows)
+      }
+    })
+    downloadCsv('fibot-grafico.csv', allRows)
+  }
 
   return (
     <article
@@ -92,7 +132,37 @@ export function MessageBubble({ message }: Readonly<MessageBubbleProps>) {
       data-testid={`message-${message.role}`}
     >
       {isAssistant ? (
-        <div className="prose prose-sm max-w-none break-words dark:prose-invert" dangerouslySetInnerHTML={{ __html: assistantHtml }} />
+        <>
+          <div
+            ref={contentRef}
+            className="prose prose-sm max-w-none break-words dark:prose-invert"
+            dangerouslySetInnerHTML={{ __html: assistantHtml }}
+          />
+          {(hasTables || hasCharts) && (
+            <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
+              {hasTables && (
+                <button
+                  type="button"
+                  onClick={handleExportTables}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                >
+                  <FiDownload size={12} aria-hidden="true" />
+                  {exportTableLabel}
+                </button>
+              )}
+              {hasCharts && (
+                <button
+                  type="button"
+                  onClick={handleExportCharts}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                >
+                  <FiDownload size={12} aria-hidden="true" />
+                  {exportChartLabel}
+                </button>
+              )}
+            </div>
+          )}
+        </>
       ) : (
         <p className="whitespace-pre-wrap break-words">{message.content}</p>
       )}
