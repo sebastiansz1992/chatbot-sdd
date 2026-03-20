@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import type { ChatMessage } from '../../types/ui'
 import { MessageBubble } from './MessageBubble'
 
@@ -8,7 +9,6 @@ type ChatTimelineProps = {
   thinkingAriaLabel: string
   conversationAriaLabel: string
   exportTableLabel: string
-  exportChartLabel: string
 }
 
 export function ChatTimeline({
@@ -18,8 +18,13 @@ export function ChatTimeline({
   thinkingAriaLabel,
   conversationAriaLabel,
   exportTableLabel,
-  exportChartLabel,
 }: Readonly<ChatTimelineProps>) {
+  const bottomRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages, isAssistantThinking])
+
   return (
     <section className="chat-scroll flex-1 space-y-4 overflow-y-auto px-3 py-4 sm:px-5 sm:py-5 lg:px-8 lg:py-6" aria-label={conversationAriaLabel}>
       {messages.map((message) => (
@@ -27,7 +32,6 @@ export function ChatTimeline({
           key={message.id}
           message={message}
           exportTableLabel={exportTableLabel}
-          exportChartLabel={exportChartLabel}
         />
       ))}
 
@@ -48,6 +52,7 @@ export function ChatTimeline({
           </div>
         </article>
       ) : null}
+      <div ref={bottomRef} />
     </section>
   )
 }

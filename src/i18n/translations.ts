@@ -25,7 +25,6 @@ export type Translations = {
   modelSelectorTitle: string
   modelSelectorAriaLabel: string
   exportTableCsv: string
-  exportChartCsv: string
 }
 
 export const translations: Record<Language, Translations> = {
@@ -56,7 +55,6 @@ export const translations: Record<Language, Translations> = {
     modelSelectorTitle: 'Seleccionar modelo de IA',
     modelSelectorAriaLabel: 'Selector de modelo',
     exportTableCsv: 'Exportar tabla como CSV',
-    exportChartCsv: 'Exportar gráfico como CSV',
   },
   en: {
     appSubtitle: 'Secure Terminal',
@@ -84,6 +82,5 @@ export const translations: Record<Language, Translations> = {
     modelSelectorTitle: 'Select AI model',
     modelSelectorAriaLabel: 'Model selector',
     exportTableCsv: 'Export table as CSV',
-    exportChartCsv: 'Export chart as CSV',
   },
 }
