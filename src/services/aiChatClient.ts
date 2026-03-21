@@ -74,6 +74,46 @@ function resolveAssistantText(payload: ChatCompletionResponse) {
   throw new Error('La respuesta de IA no contiene contenido legible.')
 }
 
+const RETRYABLE_STATUSES = new Set([403, 429, 502, 503, 504])
+const MAX_RETRIES = 2
+const RETRY_DELAY_MS = 1500
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function executeRequest(
+  apiUrl: string,
+  headers: Record<string, string>,
+  body: ChatCompletionRequest,
+): Promise<string> {
+  const response = await fetch(apiUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  })
+
+  if (!response.ok) {
+    let detail: string | undefined
+
+    try {
+      const payload = (await response.json()) as ChatErrorResponse
+      detail = payload.error?.trim() || payload.message?.trim()
+    } catch {
+      // Fallback to generic status error.
+    }
+
+    const error = new Error(
+      detail || `El servicio de IA respondió con estado ${response.status}.`,
+    )
+    ;(error as Error & { status: number }).status = response.status
+    throw error
+  }
+
+  const payload = (await response.json()) as ChatCompletionResponse
+  return resolveAssistantText(payload)
+}
+
 export async function requestAssistantReply(messages: ChatMessage[], language: Language) {
   const { apiUrl, apiKey, model, authHeader } = getApiConfig()
 
@@ -95,29 +135,22 @@ export async function requestAssistantReply(messages: ChatMessage[], language: L
     headers[authHeader] = apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`
   }
 
-  const response = await fetch(apiUrl, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-  })
+  let lastError: Error | undefined
 
-  if (!response.ok) {
-    let detail: string | undefined
-
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const payload = (await response.json()) as ChatErrorResponse
-      detail = payload.error?.trim() || payload.message?.trim()
-    } catch {
-      // Fallback to generic status error.
-    }
+      return await executeRequest(apiUrl, headers, body)
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error))
+      const status = (error as Error & { status?: number }).status
 
-    if (detail) {
-      throw new Error(detail)
-    }
+      if (!status || !RETRYABLE_STATUSES.has(status) || attempt === MAX_RETRIES) {
+        throw lastError
+      }
 
-    throw new Error(`El servicio de IA respondió con estado ${response.status}.`)
+      await wait(RETRY_DELAY_MS * (attempt + 1))
+    }
   }
 
-  const payload = (await response.json()) as ChatCompletionResponse
-  return resolveAssistantText(payload)
+  throw lastError
 }

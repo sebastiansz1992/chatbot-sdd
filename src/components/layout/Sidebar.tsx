@@ -1,6 +1,6 @@
 import { APP_TITLE } from '../../data/content'
 import { FiTrendingUp, FiBarChart2, FiDownload, FiDatabase } from 'react-icons/fi'
-import fibotImage from '../../assets/image_fibot.jpeg'
+import fibotImage from '../../assets/fibot_sin fondo.png'
 
 type SidebarProps = {
   appSubtitle: string
