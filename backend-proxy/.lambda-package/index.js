@@ -432,13 +432,34 @@ async function generateSqlFromQuestion(config, question, schemaHint, previousErr
         `No uses referencias sin esquema. Siempre usa [${config.dataFabricAllowedSchema}].[${config.dataFabricAllowedTable}] en FROM/JOIN.`,
         'No uses INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, MERGE, EXEC ni múltiples sentencias.',
         'No incluyas explicación ni markdown.',
+        'IMPORTANTE: Usa ÚNICAMENTE los nombres de columna que aparecen en el contexto de esquema. Respeta mayúsculas/minúsculas exactas. No inventes ni asumas nombres de columna.',
+        [
+            'Estructura de la tabla y significado de columnas:',
+            '- [ano] (int): Año del registro. Filtrar por año: WHERE [ano] = 2024.',
+            '- [mes] (int): Mes del registro (1-12). Filtrar por mes: WHERE [mes] = 3.',
+            '- [grupogerencial] (varchar): Categoría gerencial de alto nivel (ejemplos: Gastos directos, Ingresos, Otros costos y gastos).',
+            '- [grupo] (varchar): Grupo contable dentro de la categoría gerencial.',
+            '- [Subgrupo] (varchar): Subgrupo contable detallado (ejemplos: NOMINA, HONORARIOS, ARRIENDOS, DEPRECIACIONES Y AMORTIZACIONES, LICENCIAS SOFTWARE, etc.). NOTA: La S es mayúscula.',
+            '- [total_valor] (float): Valor total del registro.',
+            '- [total_valormes] (float): Valor total mensual.',
+            '- [total_presupuesto] (float): Valor presupuestado.',
+        ].join('\n'),
+        [
+            'Reglas de negocio para consultas financieras:',
+            '- Cuando el usuario pregunte por un Subgrupo específico (Nómina, Honorarios, etc.), filtra con WHERE [Subgrupo] = \'NOMINA\' (valores en MAYÚSCULAS).',
+            '- Para listar todos los subgrupos: SELECT DISTINCT [Subgrupo] FROM ...',
+            '- Para calcular EBITDA: Obtén los totales agrupados por [grupogerencial] para el periodo solicitado. EBITDA = SUM de Ingresos - SUM de Gastos directos - SUM de Otros costos y gastos + SUM de Depreciaciones y Amortizaciones.',
+            '- Ejemplo EBITDA: SELECT [grupogerencial], SUM([total_valor]) AS total FROM [dbo].[fact_presupuesto_gold] WHERE [ano] = 2024 GROUP BY [grupogerencial]',
+            '- Siempre agrega valores con SUM() cuando se pida totales, agrupando por periodo ([ano], [mes]) o categoría ([grupogerencial], [grupo], [Subgrupo]) según corresponda.',
+            '- Para comparar ejecutado vs presupuesto, usa [total_valor] (ejecutado) y [total_presupuesto] (presupuestado).',
+        ].join('\n'),
         schemaHint
-            ? `Contexto de esquema/tablas disponible:\n${schemaHint}`
-            : 'Si no conoces columnas exactas, usa nombres razonables y consulta conservadora.',
+            ? `Contexto de esquema adicional descubierto:\n${schemaHint}`
+            : '',
         previousError
             ? `Error previo al ejecutar SQL (evita repetirlo): ${previousError}`
-            : 'Asegúrate de que todas las tablas/columnas existan en el contexto.',
-    ].join('\n\n');
+            : '',
+    ].filter(Boolean).join('\n\n');
     const sqlDraft = await completeWithAI(config, [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: question },
@@ -499,6 +520,36 @@ async function answerWithData(config, question, sqlQuery, rows, language) {
             ? 'If there is insufficient data, say so clearly and suggest what information would be needed.'
             : 'Si no hay datos suficientes, dilo claramente y sugiere qué dato faltaría.',
         buildLanguageInstruction(language),
+        language === 'en'
+            ? [
+                'You have deep knowledge about EBITDA (Earnings Before Interest, Taxes, Depreciation, and Amortization).',
+                'The data has a column [grupogerencial] with values like: "Ingresos", "Gastos directos", "Otros costos y gastos".',
+                'The column [Subgrupo] contains detailed items like: NOMINA, HONORARIOS, DEPRECIACIONES Y AMORTIZACIONES, etc.',
+                'To calculate EBITDA from this data:',
+                '1. Sum of "Ingresos" (Operating Revenue)',
+                '2. Subtract sum of "Gastos directos" (Operating Costs)',
+                '3. Subtract sum of "Otros costos y gastos" (Other operating expenses)',
+                '4. Add back "DEPRECIACIONES Y AMORTIZACIONES" from [Subgrupo] (Depreciation & Amortization)',
+                'Present the calculation step by step in an HTML table with columns: Component and Value.',
+                'Show the final EBITDA result highlighted with <strong>.',
+                'If any component is missing, indicate which one and use zero.',
+            ].join(' ')
+            : [
+                'Tienes conocimiento profundo sobre EBITDA (Earnings Before Interest, Taxes, Depreciation, and Amortization).',
+                'Los datos tienen una columna [grupogerencial] con valores como: "Ingresos", "Gastos directos", "Otros costos y gastos".',
+                'La columna [Subgrupo] contiene rubros detallados como: NOMINA, HONORARIOS, DEPRECIACIONES Y AMORTIZACIONES, etc.',
+                'Para calcular EBITDA con estos datos:',
+                '1. Sumar "Ingresos" (Ingresos operacionales)',
+                '2. Restar la suma de "Gastos directos" (Costos operacionales)',
+                '3. Restar la suma de "Otros costos y gastos" (Otros gastos operacionales)',
+                '4. Sumar de vuelta "DEPRECIACIONES Y AMORTIZACIONES" del [Subgrupo] (Depreciaciones y Amortizaciones)',
+                'Presenta el cálculo paso a paso en una tabla HTML con columnas: Concepto y Valor.',
+                'Muestra el resultado final del EBITDA resaltado con <strong>.',
+                'Si falta algún componente en los datos, indica cuál y usa cero.',
+            ].join(' '),
+        language === 'en'
+            ? 'When the user asks about subgroups or categories, present the values from [Subgrupo] or [grupogerencial] found in the results. Format monetary values with thousand separators.'
+            : 'Cuando el usuario pregunte por subgrupos o categorías, presenta los valores de [Subgrupo] o [grupogerencial] encontrados en los resultados. Formatea los valores monetarios con separadores de miles.',
         'Responde siempre en HTML y no uses etiquetas de encabezado (h1-h6).',
         'Usa texto en negrita con <strong> para títulos o conceptos clave (bold).',
         'Si presentas cálculos, usa una tabla HTML con dos columnas: Concepto y Valor.',

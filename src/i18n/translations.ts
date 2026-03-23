@@ -70,6 +70,7 @@ export const translations: Record<Language, Translations> = {
       'Generar gráficos de Facturación',
       'Costos y gastos',
       'Utilidad neta',
+      'Cálculo EBITDA',
     ],
   },
   en: {
@@ -107,6 +108,7 @@ export const translations: Record<Language, Translations> = {
       'Generate Billing charts',
       'Costs and expenses',
       'Net profit',
+      'EBITDA Calculation',
     ],
   },
 }
