@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ChatMessage } from '../../types/ui'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
-import { FiDownload } from 'react-icons/fi'
+import { FiDownload, FiCpu } from 'react-icons/fi'
 import { downloadCsv, tableElementToRows } from '../../utils/exportData'
 
 type MessageBubbleProps = {
@@ -106,38 +106,40 @@ export function MessageBubble({ message, exportTableLabel }: Readonly<MessageBub
     downloadCsv(`fibot-tabla-${date}.csv`, allRows)
   }
 
+  if (!isAssistant) {
+    return (
+      <div className="flex justify-end w-full" data-testid={`message-${message.role}`}>
+        <div className="max-w-[75%] rounded-full bg-blue-500 px-4 py-2 text-sm text-white shadow-sm dark:bg-blue-600 sm:max-w-lg">
+          <p className="whitespace-pre-wrap break-words">{message.content}</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <article
-      className={`w-full max-w-full rounded-xl border px-4 py-3 text-sm leading-6 shadow-sm sm:max-w-3xl ${
-        isAssistant
-          ? 'border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
-          : 'ml-auto border-blue-300 bg-blue-50 text-slate-800 dark:border-blue-700 dark:bg-blue-950/40 dark:text-slate-100'
-      }`}
-      data-testid={`message-${message.role}`}
-    >
-      {isAssistant ? (
-        <>
-          <div
-            ref={contentRef}
-            className="prose prose-sm max-w-none break-words dark:prose-invert"
-            dangerouslySetInnerHTML={{ __html: assistantHtml }}
-          />
-          {hasTables && (
-            <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
-              <button
-                type="button"
-                onClick={handleExportTables}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
-              >
-                <FiDownload size={12} aria-hidden="true" />
-                {exportTableLabel}
-              </button>
-            </div>
-          )}
-        </>
-      ) : (
-        <p className="whitespace-pre-wrap break-words">{message.content}</p>
-      )}
-    </article>
+    <div className="flex items-start gap-3 w-full" data-testid={`message-${message.role}`}>
+      <div className="flex-shrink-0 flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <FiCpu size={15} className="text-slate-500 dark:text-slate-400" aria-hidden="true" />
+      </div>
+      <article className="flex-1 min-w-0 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 shadow-sm text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 sm:max-w-3xl">
+        <div
+          ref={contentRef}
+          className="prose prose-sm max-w-none break-words dark:prose-invert"
+          dangerouslySetInnerHTML={{ __html: assistantHtml }}
+        />
+        {hasTables && (
+          <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
+            <button
+              type="button"
+              onClick={handleExportTables}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+            >
+              <FiDownload size={12} aria-hidden="true" />
+              {exportTableLabel}
+            </button>
+          </div>
+        )}
+      </article>
+    </div>
   )
 }
