@@ -30,6 +30,13 @@ export type Translations = {
   capabilityExport: string
   capabilityFabric: string
   exportTableCsv: string
+  micStartAriaLabel: string
+  micStopAriaLabel: string
+  micListeningHint: string
+  micPermissionDenied: string
+  micErrorGeneric: string
+  ttsEnableAriaLabel: string
+  ttsDisableAriaLabel: string
   suggestions: string[]
 }
 
@@ -61,6 +68,13 @@ export const translations: Record<Language, Translations> = {
     modelSelectorTitle: 'Seleccionar modelo de IA',
     modelSelectorAriaLabel: 'Selector de modelo',
     exportTableCsv: 'Exportar tabla como CSV',
+    micStartAriaLabel: 'Dictar por voz',
+    micStopAriaLabel: 'Detener dictado',
+    micListeningHint: 'Escuchando...',
+    micPermissionDenied: 'Permiso de micrófono denegado. Habilítalo en la configuración del navegador.',
+    micErrorGeneric: 'No se pudo iniciar el dictado de voz.',
+    ttsEnableAriaLabel: 'Activar lectura en voz alta de las respuestas',
+    ttsDisableAriaLabel: 'Desactivar lectura en voz alta',
     engineLabel: 'Motor activo',
     capabilityAnalysis: 'Análisis financiero',
     capabilityCharts: 'Gráficos interactivos',
@@ -99,6 +113,13 @@ export const translations: Record<Language, Translations> = {
     modelSelectorTitle: 'Select AI model',
     modelSelectorAriaLabel: 'Model selector',
     exportTableCsv: 'Export table as CSV',
+    micStartAriaLabel: 'Dictate by voice',
+    micStopAriaLabel: 'Stop dictation',
+    micListeningHint: 'Listening...',
+    micPermissionDenied: 'Microphone permission denied. Enable it in your browser settings.',
+    micErrorGeneric: 'Could not start voice dictation.',
+    ttsEnableAriaLabel: 'Enable spoken responses',
+    ttsDisableAriaLabel: 'Disable spoken responses',
     engineLabel: 'Active engine',
     capabilityAnalysis: 'Financial analysis',
     capabilityCharts: 'Interactive charts',

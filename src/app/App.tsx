@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { FiVolume2, FiVolumeX } from 'react-icons/fi'
 import { ChatComposer } from '../components/chat/ChatComposer'
 import { ChatDisclaimer } from '../components/chat/ChatDisclaimer'
 import { ChatTimeline } from '../components/chat/ChatTimeline'
 import { SuggestionChips } from '../components/chat/SuggestionChips'
 import { useChatState } from '../components/chat/useChatState'
+import { useSpeechSynthesis } from '../components/chat/useSpeechSynthesis'
 import { AppShell } from '../components/layout/AppShell'
 import { TopStatusBar } from '../components/layout/TopStatusBar'
 import { translations, type Language } from '../i18n/translations'
@@ -28,10 +30,17 @@ function getInitialLang(): Language {
   return stored === 'en' ? 'en' : 'es'
 }
 
+const TTS_STORAGE_KEY = 'fibot-tts-enabled'
+
+function getInitialTtsEnabled(): boolean {
+  return localStorage.getItem(TTS_STORAGE_KEY) === 'true'
+}
+
 export default function App() {
   const [theme, setTheme] = useState<Theme>(getInitialTheme)
   const [lang, setLang] = useState<Language>(getInitialLang)
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
+  const [isTtsEnabled, setIsTtsEnabled] = useState<boolean>(getInitialTtsEnabled)
 
   const t = translations[lang]
 
@@ -41,6 +50,9 @@ export default function App() {
     t.errorFallback,
   )
 
+  const { isSupported: isTtsSupported, speak, cancel: cancelSpeech } = useSpeechSynthesis(lang)
+  const lastSpokenIdRef = useRef<string | null>(null)
+
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark')
     localStorage.setItem(THEME_STORAGE_KEY, theme)
@@ -49,6 +61,22 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(LANG_STORAGE_KEY, lang)
   }, [lang])
+
+  useEffect(() => {
+    localStorage.setItem(TTS_STORAGE_KEY, String(isTtsEnabled))
+    if (!isTtsEnabled) {
+      cancelSpeech()
+    }
+  }, [isTtsEnabled, cancelSpeech])
+
+  useEffect(() => {
+    if (!isTtsEnabled || !isTtsSupported) return
+    const last = messages.at(-1)
+    if (last?.role !== 'assistant') return
+    if (lastSpokenIdRef.current === last.id) return
+    lastSpokenIdRef.current = last.id
+    speak(last.content)
+  }, [messages, isTtsEnabled, isTtsSupported, speak])
 
   const toggleTheme = () => {
     setTheme((current) => (current === 'dark' ? 'light' : 'dark'))
@@ -60,6 +88,10 @@ export default function App() {
 
   const toggleSidebar = () => {
     setIsSidebarOpen((current) => !current)
+  }
+
+  const toggleTts = () => {
+    setIsTtsEnabled((current) => !current)
   }
 
   const closeSidebar = () => {
@@ -126,8 +158,31 @@ export default function App() {
           inputAriaLabel={t.inputAriaLabel}
           sendAriaLabel={t.sendAriaLabel}
           isSending={isSending}
+          language={lang}
+          micStartAriaLabel={t.micStartAriaLabel}
+          micStopAriaLabel={t.micStopAriaLabel}
+          micListeningHint={t.micListeningHint}
+          micPermissionDenied={t.micPermissionDenied}
+          micErrorGeneric={t.micErrorGeneric}
         />
-        <ChatDisclaimer text={t.disclaimer} />
+        <div className="flex items-center justify-between gap-2">
+          <ChatDisclaimer text={t.disclaimer} />
+          {isTtsSupported ? (
+            <button
+              type="button"
+              onClick={toggleTts}
+              className={`flex-shrink-0 rounded-lg p-1.5 transition-colors ${
+                isTtsEnabled
+                  ? 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-300'
+                  : 'text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300'
+              }`}
+              aria-label={isTtsEnabled ? t.ttsDisableAriaLabel : t.ttsEnableAriaLabel}
+              aria-pressed={isTtsEnabled}
+            >
+              {isTtsEnabled ? <FiVolume2 size={14} /> : <FiVolumeX size={14} />}
+            </button>
+          ) : null}
+        </div>
       </div>
     </AppShell>
   )
