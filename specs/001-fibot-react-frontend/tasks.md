@@ -12,14 +12,14 @@
 
 ## Phase 2: Foundational
 - [x] T009 Define shared UI entities and state types in src/types/ui.ts
-- [x] T010 Create typed mock datasets for models/insights/messages/status/profile in src/data/mockData.ts
-- [x] T011 Create shared static labels and disclaimers in src/data/content.ts
+- [x] T010 Create typed mock datasets for models/messages/status/profile in src/data/mockData.ts
+- [x] T011 Create shared static labels in src/data/content.ts
 - [x] T012 Build application shell layout component (sidebar/header/main regions) in src/components/layout/AppShell.tsx
 - [x] T013 Build root app composition scaffold in src/app/App.tsx
 - [x] T014 Wire app bootstrap and global style import in src/main.tsx
 - [x] T015 Create global utility style layer for spacing/overflow/focus baseline in src/styles/globals.css
 
-## Phase 3: US1
+## Phase 3: US1 — Basic Chat
 - [x] T042 [P] [US1] Add unit test for empty-submit prevention in tests/unit/chatComposer.emptySubmit.test.tsx
 - [x] T043 [P] [US1] Add unit test for message append and input clear on send in tests/unit/chatFlow.sendMessage.test.tsx
 - [x] T016 [P] [US1] Create message bubble presentation component in src/components/chat/MessageBubble.tsx
@@ -31,18 +31,18 @@
 - [x] T022 [US1] Enforce empty-message submit prevention and input reset behavior in src/components/chat/ChatComposer.tsx
 - [x] T023 [US1] Display advisory disclaimer below chat composer in src/components/chat/ChatDisclaimer.tsx
 
-## Phase 4: US2
+## Phase 4: US2 — Sidebar & Model Selector
 - [x] T044 [P] [US2] Add unit tests for single selected model and minimum four insight cards in tests/unit/sidebar.modelsInsights.test.tsx
 - [x] T024 [P] [US2] Create model option item component with selected styling in src/components/models/ModelOptionItem.tsx
 - [x] T025 [P] [US2] Create model selector list component in src/components/models/ModelSelector.tsx
 - [x] T026 [P] [US2] Create market insight card component in src/components/insights/InsightCard.tsx
 - [x] T027 [P] [US2] Create quick insights list section component in src/components/insights/QuickInsights.tsx
 - [x] T028 [US2] Implement selected-model state control hook in src/components/models/useModelSelection.ts
-- [x] T029 [US2] Compose sidebar sections (models + insights + profile) in src/components/layout/Sidebar.tsx
+- [x] T029 [US2] Compose sidebar sections (engine + capabilities + branding) in src/components/layout/Sidebar.tsx
 - [x] T030 [US2] Add graceful placeholder rendering for missing insight values in src/components/insights/QuickInsights.tsx
 - [x] T031 [US2] Mount sidebar into shell layout in src/components/layout/AppShell.tsx
 
-## Phase 5: US3
+## Phase 5: US3 — Status Bar
 - [x] T045 [P] [US3] Add unit test for visible encryption and connection status indicators in tests/unit/topStatusBar.visibility.test.tsx
 - [x] T032 [P] [US3] Create encryption status badge component in src/components/layout/EncryptionStatusBadge.tsx
 - [x] T033 [P] [US3] Create active session status component in src/components/layout/ActiveSessionStatus.tsx
@@ -59,7 +59,7 @@
 - [x] T046 [P] Add smoke e2e test for open app -> send message -> timeline append in tests/e2e/chat.smoke.spec.ts
 - [x] T047 Run lint/build/test quality gates and record outcomes in specs/001-fibot-react-frontend/quickstart.md
 - [x] T048 Measure first contentful render against <2.0s target and log result in specs/001-fibot-react-frontend/quickstart.md
-- [x] T049 Measure message-send interaction feedback against <100ms target and log result in specs/001-fibot-react-frontend/quickstart.md
+- [x] T049 Measure message-send interaction latency against <100ms target and log result in specs/001-fibot-react-frontend/quickstart.md
 
 ## Phase 7: US4 — AI Agent Integration
 - [x] T050 [US4] Create AI HTTP client service in src/services/aiChatClient.ts
@@ -82,8 +82,51 @@
 - [x] T065 Create backend proxy deploy documentation in backend-proxy/README.md
 
 ## Phase 9: AWS Deployment
-- [x] T066 Deploy frontend build to S3 static website hosting
+- [x] T066 Deploy frontend build to S3 static website hosting behind CloudFront
 - [x] T067 Deploy Lambda function with Node.js 20.x runtime
 - [x] T068 Configure API Gateway HTTP API with POST route to Lambda
 - [ ] T069 Configure API Gateway CORS preflight to return proper Access-Control-Allow-Origin headers
-- [ ] T070 Verify end-to-end flow: S3 frontend → API Gateway → Lambda → Gemini → response in chat
+- [ ] T070 Verify end-to-end flow: CloudFront frontend → API Gateway → Lambda → Gemini → response in chat
+
+## Phase 10: Multilingual Support (US7)
+- [x] T071 [US7] Create translations module with ES/EN strings in src/i18n/translations.ts
+- [x] T072 [US7] Add language toggle button to TopStatusBar with localStorage persistence
+- [x] T073 [US7] Thread language prop through App → ChatComposer, ChatTimeline, Sidebar, TopStatusBar
+- [x] T074 [US7] Pass language param in AI request payload via aiChatClient.requestAssistantReply
+- [x] T075 [US7] Add ES/EN suggestion chip text to SuggestionChips component
+
+## Phase 11: Rich Content Rendering (US6)
+- [x] T076 [US6] Add DOMPurify dependency for HTML sanitization
+- [x] T077 [US6] Add Marked.js dependency for Markdown parsing
+- [x] T078 [US6] Implement HTML/Markdown rendering in MessageBubble with DOMPurify sanitization
+- [x] T079 [US6] Implement Mermaid-to-QuickChart conversion in MessageBubble (buildQuickChartFromMermaidBlock)
+- [x] T080 [US6] Add HTML table detection and "Download CSV" button in MessageBubble
+- [x] T081 [US6] Create exportData utility (downloadCsv, tableElementToRows) in src/utils/exportData.ts
+
+## Phase 12: Voice Input (US5)
+- [x] T082 [US5] Create useSpeechRecognition hook using Web Speech API in src/components/chat/useSpeechRecognition.ts
+- [x] T083 [US5] Add microphone button to ChatComposer with listening visual state
+- [x] T084 [US5] Append interim/final transcript to chat input text
+- [x] T085 [US5] Handle speech recognition errors (permission denied, not supported) with inline UI message
+- [x] T086 [US5] Auto-stop recording when message send starts
+
+## Phase 13: Text-to-Speech (US5)
+- [x] T087 [US5] Create useSpeechSynthesis hook using SpeechSynthesis API in src/components/chat/useSpeechSynthesis.ts
+- [x] T088 [US5] Auto-speak new assistant messages after each response
+- [x] T089 [US5] Strip HTML tags from assistant content before passing to TTS
+- [x] T090 [US5] Add TTS toggle button with localStorage persistence (TTS_STORAGE_KEY)
+- [x] T091 [US5] Support ES/EN locale selection in SpeechSynthesis utterances
+
+## Phase 14: Dark Mode (US8)
+- [x] T092 [US8] Add theme toggle button to TopStatusBar
+- [x] T093 [US8] Apply `dark:` Tailwind classes across all components
+- [x] T094 [US8] Manage theme state in App.tsx with `dark` class on root element
+
+## Phase 15: Suggestion Chips (US2 Enhancement)
+- [x] T095 Create SuggestionChips component with ES/EN quick-reply suggestions in src/components/chat/SuggestionChips.tsx
+- [x] T096 Render SuggestionChips after welcome message in ChatTimeline
+- [x] T097 Wire chip click to send message via useChatState.sendMessage
+
+## Phase 16: Retry Logic & API Hardening
+- [x] T098 Add retry logic to aiChatClient (2 retries, 1500ms exponential backoff, codes: 403/429/502/503/504)
+- [x] T099 Add CPU (FiCpu) icon as assistant avatar in MessageBubble and ChatTimeline thinking indicator

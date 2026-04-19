@@ -22,7 +22,7 @@
 
 ### Frontend (.env)
 ```
-VITE_AI_API_URL=https://<api-id>.execute-api.<region>.amazonaws.com/<stage>/<function>
+VITE_AI_API_URL=https://d379s360969u0c.cloudfront.net/api/fibot-ai-proxy
 VITE_AI_API_KEY=
 VITE_AI_MODEL=
 VITE_AI_AUTH_HEADER=Authorization
@@ -34,16 +34,23 @@ AI_API_URL=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-fl
 AI_API_KEY=<gemini-api-key>
 AI_PROVIDER=gemini
 AI_AUTH_HEADER=x-goog-api-key
-ALLOWED_ORIGIN=http://<bucket>.s3-website-<region>.amazonaws.com
+ALLOWED_ORIGIN=https://d379s360969u0c.cloudfront.net
 ```
 
 ## Validation
 - Validate UI against baseline viewports: 1366x768, 1440x900, 1920x1080.
 - Validate chat send/empty-submit behavior.
-- Validate model selector and insight cards.
-- Validate status indicators.
+- Validate model selector and capability badges in sidebar.
+- Validate status indicators (encryption badge, session status).
 - Validate AI response flow: send message → loading state → assistant response appended.
 - Validate error handling: disconnect network → send message → error shown in chat.
+- Validate suggestion chips: click chip → message sent as user.
+- Validate voice input: click mic → speak → text appears in input field.
+- Validate TTS: receive assistant message → voice playback starts; toggle off → playback stops.
+- Validate language toggle: switch ES/EN → all labels update immediately.
+- Validate dark mode: toggle theme → interface switches color scheme.
+- Validate chart rendering: assistant returns mermaid bar chart block → QuickChart image displayed.
+- Validate CSV export: assistant returns HTML table → "Download CSV" button appears and triggers download.
 
 ## Execution Log
 - `npm run lint`: PASS
