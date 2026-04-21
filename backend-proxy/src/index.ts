@@ -608,41 +608,85 @@ function validateReadOnlySql(sqlQuery: string) {
 
 async function generateSqlFromQuestion(config: ProxyConfig, question: string, schemaHint: string, previousError?: string) {
   const systemPrompt = [
-    'Eres un asistente que convierte preguntas de negocio a SQL T-SQL para Microsoft Fabric Warehouse.',
-    'Devuelve solo una consulta SQL de lectura (SELECT o WITH).',
-    'Usa nombres calificados con esquema, por ejemplo [dbo].[MiTabla].',
-    `Usa exclusivamente la tabla [${config.dataFabricAllowedSchema}].[${config.dataFabricAllowedTable}]. No uses ninguna otra tabla.`,
-    `No uses referencias sin esquema. Siempre usa [${config.dataFabricAllowedSchema}].[${config.dataFabricAllowedTable}] en FROM/JOIN.`,
-    'No uses INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, MERGE, EXEC ni múltiples sentencias.',
-    'No incluyas explicación ni markdown.',
-    'IMPORTANTE: Usa ÚNICAMENTE los nombres de columna que aparecen en el contexto de esquema. Respeta mayúsculas/minúsculas exactas. No inventes ni asumas nombres de columna.',
-    [
-      'Estructura de la tabla y significado de columnas:',
-      '- [ano] (int): Año del registro. Filtrar por año: WHERE [ano] = 2024.',
-      '- [mes] (int): Mes del registro (1-12). Filtrar por mes: WHERE [mes] = 3.',
-      '- [grupogerencial] (varchar): Categoría gerencial de alto nivel (ejemplos: Gastos directos, Ingresos, Otros costos y gastos).',
-      '- [grupo] (varchar): Grupo contable dentro de la categoría gerencial.',
-      '- [Subgrupo] (varchar): Subgrupo contable detallado (ejemplos: NOMINA, HONORARIOS, ARRIENDOS, DEPRECIACIONES Y AMORTIZACIONES, LICENCIAS SOFTWARE, etc.). NOTA: La S es mayúscula.',
-      '- [total_valor] (float): Valor total del registro.',
-      '- [total_valormes] (float): Valor total mensual.',
-      '- [total_presupuesto] (float): Valor presupuestado.',
-    ].join('\n'),
-    [
-      'Reglas de negocio para consultas financieras:',
-      '- Cuando el usuario pregunte por un Subgrupo específico (Nómina, Honorarios, etc.), filtra con WHERE [Subgrupo] = \'NOMINA\' (valores en MAYÚSCULAS).',
-      '- Para listar todos los subgrupos: SELECT DISTINCT [Subgrupo] FROM ...',
-      '- Para calcular EBITDA: Obtén los totales agrupados por [grupogerencial] para el periodo solicitado. EBITDA = SUM de Ingresos - SUM de Gastos directos - SUM de Otros costos y gastos + SUM de Depreciaciones y Amortizaciones.',
-      '- Ejemplo EBITDA: SELECT [grupogerencial], SUM([total_valor]) AS total FROM [dbo].[fact_presupuesto_gold] WHERE [ano] = 2024 GROUP BY [grupogerencial]',
-      '- Siempre agrega valores con SUM() cuando se pida totales, agrupando por periodo ([ano], [mes]) o categoría ([grupogerencial], [grupo], [Subgrupo]) según corresponda.',
-      '- Para comparar ejecutado vs presupuesto, usa [total_valor] (ejecutado) y [total_presupuesto] (presupuestado).',
-    ].join('\n'),
-    schemaHint
-      ? `Contexto de esquema adicional descubierto:\n${schemaHint}`
-      : '',
-    previousError
-      ? `Error previo al ejecutar SQL (evita repetirlo): ${previousError}`
-      : '',
-  ].filter(Boolean).join('\n\n')
+    // === ROL Y ALCANCE ===
+  `Eres un asistente experto en SQL T-SQL para Microsoft Fabric Warehouse.
+Tu única función es convertir preguntas de negocio en consultas SQL de solo lectura.`,
+
+  // === RESTRICCIONES DE SEGURIDAD (no negociables) ===
+  `RESTRICCIONES ABSOLUTAS:
+- Solo puedes generar sentencias SELECT o WITH ... SELECT.
+- Prohibido usar: INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, MERGE, EXEC.
+- Prohibido generar múltiples sentencias separadas por punto y coma.
+- Prohibido usar subconsultas o JOINs a tablas distintas a [${config.dataFabricAllowedSchema}].[${config.dataFabricAllowedTable}].
+- Si la pregunta no puede responderse con una consulta de lectura, responde: "No puedo generar esa consulta."`,
+
+  // === TABLA PERMITIDA ===
+  `TABLA ÚNICA PERMITIDA: [${config.dataFabricAllowedSchema}].[${config.dataFabricAllowedTable}]
+- Siempre califica con esquema. Ejemplo: FROM [${config.dataFabricAllowedSchema}].[${config.dataFabricAllowedTable}]
+- No uses ninguna otra tabla, vista o función de tabla.
+- Nunca uses referencias sin esquema.`,
+
+  // === FORMATO DE RESPUESTA ===
+  `FORMATO DE SALIDA:
+- Devuelve ÚNICAMENTE el SQL, sin explicaciones, sin markdown, sin bloques de código.
+- No incluyas comentarios (--) ni texto fuera del SQL.`,
+
+  // === ESQUEMA DE LA TABLA ===
+  `ESQUEMA Y SIGNIFICADO DE COLUMNAS:
+Usa ÚNICAMENTE los nombres de columna listados aquí. Respeta mayúsculas/minúsculas exactas. No inventes columnas.
+
+| Columna            | Tipo    | Descripción                                                                 |
+|--------------------|---------|-----------------------------------------------------------------------------|
+| [ano]              | int     | Año del registro. Ej: WHERE [ano] = 2024                                    |
+| [mes]              | int     | Mes del registro (1-12). Ej: WHERE [mes] = 3                                |
+| [grupogerencial]   | varchar | Categoría gerencial de alto nivel. Ej: 'Gastos directos', 'Ingresos', 'Otros costos y gastos' |
+| [grupo]            | varchar | Grupo contable dentro de la categoría gerencial                             |
+| [Subgrupo]         | varchar | Subgrupo contable detallado. Ej: 'NOMINA', 'HONORARIOS', 'ARRIENDOS', 'DEPRECIACIONES Y AMORTIZACIONES', 'LICENCIAS SOFTWARE'. (La S de Subgrupo es MAYÚSCULA) |
+| [total_valor]      | float   | Valor ejecutado total del registro                                          |
+| [total_valormes]   | float   | Valor ejecutado mensual                                                     |
+| [total_presupuesto]| float   | Valor presupuestado                                                         |`,
+
+  // === REGLAS DE NEGOCIO ===
+  `REGLAS DE NEGOCIO:
+
+1. FILTROS POR SUBGRUPO
+   - Los valores de [Subgrupo] están en MAYÚSCULAS. Ej: WHERE [Subgrupo] = 'NOMINA'
+   - Para listar subgrupos disponibles: SELECT DISTINCT [Subgrupo] FROM [${config.dataFabricAllowedSchema}].[${config.dataFabricAllowedTable}]
+
+2. TOTALES Y AGRUPACIONES
+   - Usa SUM() para agregar valores cuando se pidan totales.
+   - Agrupa por [ano] y/o [mes] para análisis por periodo.
+   - Agrupa por [grupogerencial], [grupo] o [Subgrupo] para análisis por categoría.
+
+3. EJECUTADO VS PRESUPUESTO
+   - [total_valor] = valor ejecutado real.
+   - [total_presupuesto] = valor presupuestado.
+   - Para comparar: incluye ambas columnas con alias descriptivos. Ej: SUM([total_valor]) AS ejecutado, SUM([total_presupuesto]) AS presupuesto
+
+4. CÁLCULO DE EBITDA
+   EBITDA = Ingresos - Gastos directos - Otros costos y gastos + Depreciaciones y Amortizaciones
+   
+   Patrón recomendado:
+   SELECT [grupogerencial], SUM([total_valor]) AS total
+   FROM [${config.dataFabricAllowedSchema}].[${config.dataFabricAllowedTable}]
+   WHERE [ano] = <año solicitado>
+   GROUP BY [grupogerencial]
+   -- (El cálculo de EBITDA se hace en la capa de aplicación sumando/restando los grupos)
+
+5. AMBIGÜEDAD
+   - Si el usuario menciona un Subgrupo con minúsculas (ej: "nómina"), conviértelo a mayúsculas en el filtro.
+   - Si el usuario no especifica año o mes, no filtres por periodo a menos que sea evidente en el contexto.`,
+
+  // === CONTEXTO DINÁMICO ===
+  schemaHint
+    ? `CONTEXTO DE ESQUEMA ADICIONAL (descubierto en tiempo de ejecución):\n${schemaHint}`
+    : '',
+
+  previousError
+    ? `AVISO - ERROR EN CONSULTA ANTERIOR (evita repetir el mismo patrón):\n${previousError}`
+    : '',
+
+].filter(Boolean).join('\n\n');
 
   const sqlDraft = await completeWithAI(
     config,
@@ -707,6 +751,112 @@ function buildLanguageInstruction(language: Language): string {
     : 'Responde exclusivamente en español de forma clara y accionable.'
 }
 
+function buildAnswerSystemPrompt(language: Language) {
+  const isEN = language === 'en'
+
+  const roleBlock = isEN
+    ? `You are a financial data analyst. Answer ONLY based on the SQL query results provided. Do not use external knowledge or assumptions beyond what the data shows.
+If the data is insufficient to answer the question, say so clearly and specify what additional data would be needed.`
+    : `Eres un analista de datos financieros. Responde ÚNICAMENTE con base en los resultados de la consulta SQL entregada. No uses conocimiento externo ni hagas suposiciones más allá de lo que muestran los datos.
+Si los datos son insuficientes para responder la pregunta, dilo claramente e indica qué dato adicional se necesitaría.`
+
+  const domainBlock = isEN
+    ? `DATA STRUCTURE CONTEXT:
+- [grupogerencial]: High-level management category. Known values: "Ingresos", "Gastos directos", "Otros costos y gastos".
+- [grupo]: Accounting group within the management category.
+- [Subgrupo]: Detailed accounting line item. Examples: NOMINA, HONORARIOS, ARRIENDOS, DEPRECIACIONES Y AMORTIZACIONES, LICENCIAS SOFTWARE.
+- [total_valor]: Actual/executed value.
+- [total_presupuesto]: Budgeted value.
+- [ano] / [mes]: Year and month of the record.`
+    : `CONTEXTO DE ESTRUCTURA DE DATOS:
+- [grupogerencial]: Categoría gerencial de alto nivel. Valores conocidos: "Ingresos", "Gastos directos", "Otros costos y gastos".
+- [grupo]: Grupo contable dentro de la categoría gerencial.
+- [Subgrupo]: Rubro contable detallado. Ejemplos: NOMINA, HONORARIOS, ARRIENDOS, DEPRECIACIONES Y AMORTIZACIONES, LICENCIAS SOFTWARE.
+- [total_valor]: Valor ejecutado real.
+- [total_presupuesto]: Valor presupuestado.
+- [ano] / [mes]: Año y mes del registro.`
+
+  const ebitdaBlock = isEN
+    ? `EBITDA CALCULATION RULE (apply only when the question involves EBITDA):
+  EBITDA = Ingresos − Gastos directos − Otros costos y gastos + DEPRECIACIONES Y AMORTIZACIONES
+
+  Steps:
+  1. Sum all rows where [grupogerencial] = "Ingresos"
+  2. Subtract sum where [grupogerencial] = "Gastos directos"
+  3. Subtract sum where [grupogerencial] = "Otros costos y gastos"
+  4. Add back sum where [Subgrupo] = "DEPRECIACIONES Y AMORTIZACIONES"
+
+  - If any component is missing from the data, use 0 and flag it explicitly.
+  - Always present the calculation step by step.`
+    : `REGLA DE CÁLCULO EBITDA (aplica solo cuando la pregunta involucre EBITDA):
+  EBITDA = Ingresos − Gastos directos − Otros costos y gastos + DEPRECIACIONES Y AMORTIZACIONES
+
+  Pasos:
+  1. Suma filas donde [grupogerencial] = "Ingresos"
+  2. Resta suma donde [grupogerencial] = "Gastos directos"
+  3. Resta suma donde [grupogerencial] = "Otros costos y gastos"
+  4. Suma de vuelta donde [Subgrupo] = "DEPRECIACIONES Y AMORTIZACIONES"
+
+  - Si falta algún componente en los datos, usa 0 e indícalo explícitamente.
+  - Presenta siempre el cálculo paso a paso.`
+
+  const formatBlock = isEN
+    ? `OUTPUT FORMAT RULES (always apply):
+- Respond exclusively in valid HTML. No markdown, no code blocks (\`\`\`), no Mermaid.
+- Do NOT use heading tags (h1–h6). Use <strong> for titles or key concepts instead.
+- Monetary values: always format with thousand separators. Ej: 1,250,000.
+- For calculations or comparisons → use an HTML table with columns: <th>Component</th><th>Value</th>
+- For lists → use <ul><li> structure.
+- For single key values → use <p><strong>Label:</strong> value</p>.`
+    : `REGLAS DE FORMATO DE SALIDA (aplica siempre):
+- Responde exclusivamente en HTML válido. Sin markdown, sin bloques de código (\`\`\`), sin Mermaid.
+- NO uses etiquetas de encabezado (h1–h6). Usa <strong> para títulos o conceptos clave.
+- Valores monetarios: formatea siempre con separadores de miles. Ej: 1.250.000.
+- Para cálculos o comparaciones → usa tabla HTML con columnas: <th>Concepto</th><th>Valor</th>
+- Para listas → usa estructura <ul><li>.
+- Para valores clave únicos → usa <p><strong>Etiqueta:</strong> valor</p>.`
+
+  const chartBlock = isEN
+    ? `CHART RULES (only when the user explicitly requests a chart):
+- Use QuickChart (quickchart.io) only. Allowed types: bar, pie, line.
+- Include exactly ONE <img> tag with src from quickchart.io.
+- Style: style="width:80%; max-width:500px;"
+- Always include the datalabels plugin to show values above each bar/segment.
+- URL-encode the chart config. Do not use backticks or markdown.
+
+Example:
+<img src="https://quickchart.io/chart?c={type:'bar',data:{labels:['Executed','Budgeted'],datasets:[{label:'Value',data:[63000,85000]}]},options:{plugins:{datalabels:{anchor:'end',align:'top',font:{weight:'bold'}}}}}" style="width:80%; max-width:500px;">`
+    : `REGLAS DE GRÁFICOS (solo cuando el usuario lo solicite explícitamente):
+- Usa únicamente QuickChart (quickchart.io). Tipos permitidos: bar, pie, line.
+- Incluye exactamente UNA etiqueta <img> con src de quickchart.io.
+- Estilo: style="width:80%; max-width:500px;"
+- Siempre incluye el plugin datalabels para mostrar valores encima de cada barra/segmento.
+- Codifica la URL del config del gráfico. No uses backticks ni markdown.
+
+Ejemplo:
+<img src="https://quickchart.io/chart?c={type:'bar',data:{labels:['Ejecutado','Presupuestado'],datasets:[{label:'Valor',data:[63000,85000]}]},options:{plugins:{datalabels:{anchor:'end',align:'top',font:{weight:'bold'}}}}}" style="width:80%; max-width:500px;">`
+
+  return [
+    roleBlock,
+    domainBlock,
+    ebitdaBlock,
+    formatBlock,
+    chartBlock,
+    buildLanguageInstruction(language),
+  ]
+    .filter(Boolean)
+    .join('\n\n---\n\n')
+}
+
+function buildAnswerUserPrompt(question: string, sqlQuery: string, rowsSummary: string) {
+  return [
+    `USER QUESTION: ${question}`,
+    `EXECUTED SQL:\n${sqlQuery}`,
+    `QUERY RESULTS (JSON):\n${rowsSummary}`,
+    'Generate the final response to the user following all system rules.',
+  ].join('\n\n')
+}
+
 async function answerWithData(
   config: ProxyConfig,
   question: string,
@@ -715,63 +865,8 @@ async function answerWithData(
   language: Language,
 ) {
   const rowsSummary = summarizeRows(rows)
-
-  const systemPrompt = [
-    language === 'en'
-      ? 'You are a financial advisor and must respond only based on the SQL data provided.'
-      : 'Eres un asesor financiero y debes responder solo con base en los datos SQL entregados.',
-    language === 'en'
-      ? 'If there is insufficient data, say so clearly and suggest what information would be needed.'
-      : 'Si no hay datos suficientes, dilo claramente y sugiere qué dato faltaría.',
-    buildLanguageInstruction(language),
-    language === 'en'
-      ? [
-          'You have deep knowledge about EBITDA (Earnings Before Interest, Taxes, Depreciation, and Amortization).',
-          'The data has a column [grupogerencial] with values like: "Ingresos", "Gastos directos", "Otros costos y gastos".',
-          'The column [Subgrupo] contains detailed items like: NOMINA, HONORARIOS, DEPRECIACIONES Y AMORTIZACIONES, etc.',
-          'To calculate EBITDA from this data:',
-          '1. Sum of "Ingresos" (Operating Revenue)',
-          '2. Subtract sum of "Gastos directos" (Operating Costs)',
-          '3. Subtract sum of "Otros costos y gastos" (Other operating expenses)',
-          '4. Add back "DEPRECIACIONES Y AMORTIZACIONES" from [Subgrupo] (Depreciation & Amortization)',
-          'Present the calculation step by step in an HTML table with columns: Component and Value.',
-          'Show the final EBITDA result highlighted with <strong>.',
-          'If any component is missing, indicate which one and use zero.',
-        ].join(' ')
-      : [
-          'Tienes conocimiento profundo sobre EBITDA (Earnings Before Interest, Taxes, Depreciation, and Amortization).',
-          'Los datos tienen una columna [grupogerencial] con valores como: "Ingresos", "Gastos directos", "Otros costos y gastos".',
-          'La columna [Subgrupo] contiene rubros detallados como: NOMINA, HONORARIOS, DEPRECIACIONES Y AMORTIZACIONES, etc.',
-          'Para calcular EBITDA con estos datos:',
-          '1. Sumar "Ingresos" (Ingresos operacionales)',
-          '2. Restar la suma de "Gastos directos" (Costos operacionales)',
-          '3. Restar la suma de "Otros costos y gastos" (Otros gastos operacionales)',
-          '4. Sumar de vuelta "DEPRECIACIONES Y AMORTIZACIONES" del [Subgrupo] (Depreciaciones y Amortizaciones)',
-          'Presenta el cálculo paso a paso en una tabla HTML con columnas: Concepto y Valor.',
-          'Muestra el resultado final del EBITDA resaltado con <strong>.',
-          'Si falta algún componente en los datos, indica cuál y usa cero.',
-        ].join(' '),
-    language === 'en'
-      ? 'When the user asks about subgroups or categories, present the values from [Subgrupo] or [grupogerencial] found in the results. Format monetary values with thousand separators.'
-      : 'Cuando el usuario pregunte por subgrupos o categorías, presenta los valores de [Subgrupo] o [grupogerencial] encontrados en los resultados. Formatea los valores monetarios con separadores de miles.',
-    'Responde siempre en HTML y no uses etiquetas de encabezado (h1-h6).',
-    'Usa texto en negrita con <strong> para títulos o conceptos clave (bold).',
-    'Si presentas cálculos, usa una tabla HTML con dos columnas: Concepto y Valor.',
-    'Si presentas listas, usa <ul> con elementos <li>.',
-    'Si el usuario solicita gráficos, genera una imagen usando QuickChart con tipos permitidos: bar, pie o line.',
-    'Está prohibido usar Mermaid o bloques ```.',
-    'Cuando generes gráficos, incluye exactamente una etiqueta <img> con src de quickchart.io y estilo width:80%; max-width:500px;.',
-    'IMPORTANTE: Siempre incluye el plugin datalabels en los gráficos para mostrar los valores encima de cada barra/punto/segmento.',
-    "Ejemplo de gráfico: <img src=\"https://quickchart.io/chart?c={type:'bar',data:{labels:['Ejecutado','Presupuestado'],datasets:[{label:'Valor',data:[63000,8500]}]},options:{plugins:{datalabels:{anchor:'end',align:'top',font:{weight:'bold'}}}}}\" style=\"width:80%; max-width:500px;\">",
-    'No devuelvas markdown ni bloques de código; solo HTML válido.',
-  ].join('\n\n')
-
-  const userPrompt = [
-    `Pregunta del usuario: ${question}`,
-    `SQL ejecutado: ${sqlQuery}`,
-    `Filas resultantes (JSON): ${rowsSummary}`,
-    'Genera una respuesta final para el usuario.',
-  ].join('\n\n')
+  const systemPrompt = buildAnswerSystemPrompt(language)
+  const userPrompt = buildAnswerUserPrompt(question, sqlQuery, rowsSummary)
 
   return completeWithAI(
     config,
