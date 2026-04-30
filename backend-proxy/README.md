@@ -1,9 +1,9 @@
 # Backend Proxy AWS Lambda (TypeScript)
 
-Este proxy protege la API key del proveedor de IA y ahora soporta un flujo de agente con Data Fabric:
+Este proxy protege la API key del proveedor de IA y soporta un flujo de agente con SQL Server:
 
 1. IA convierte pregunta del usuario a SQL.
-2. Lambda ejecuta SQL en Microsoft Fabric.
+2. Lambda ejecuta SQL en la base de datos configurada.
 3. Lambda envía resultados a la IA para generar la respuesta final.
 
 ## Arquitectura recomendada
@@ -14,68 +14,118 @@ Este proxy protege la API key del proveedor de IA y ahora soporta un flujo de ag
 
 ## Variables de entorno de Lambda
 
+### IA
+
 - `AI_API_URL` (requerido): endpoint del proveedor IA.
 - `AI_API_KEY` (opcional/recomendado): token o API key.
 - `AI_MODEL` (opcional): modelo por defecto.
 - `AI_AUTH_HEADER` (opcional): por defecto `Authorization`.
 - `AI_PROVIDER` (opcional): `openai-compatible` (default) o `gemini`.
+- `AI_SQL_MODEL` (opcional): modelo para etapa pregunta→SQL.
+- `AI_ANSWER_MODEL` (opcional): modelo para etapa resultados→respuesta final.
 - `ALLOWED_ORIGIN` (opcional): origen permitido para CORS, por ejemplo `https://tudominio.com`.
-- `AI_SQL_MODEL` (opcional): modelo para etapa pregunta->SQL.
-- `AI_ANSWER_MODEL` (opcional): modelo para etapa resultados->respuesta final.
-- `DATA_FABRIC_CONNECTION_STRING` (opcional/recomendado): cadena de conexión SQL de Microsoft Fabric.
-- `DATA_FABRIC_SERVER` (opcional): host de Fabric Warehouse, por ejemplo `xxxx.datawarehouse.fabric.microsoft.com`.
-- `DATA_FABRIC_DATABASE` (opcional): nombre de base de datos/warehouse a consultar.
-- `AZURE_TENANT_ID` (opcional): tenant Entra ID para Service Principal.
+
+### Base de datos SQL Server
+
+- `DB_CONNECTION_STRING` (opcional): cadena de conexión completa SQL Server.
+- `DB_SERVER` (opcional): host del servidor. Ej: `financialfibot.database.windows.net,1433`.
+- `DB_DATABASE` (opcional): nombre de la base de datos.
+- `DB_USER` (opcional): usuario SQL Server para autenticación SQL auth.
+- `DB_PASSWORD` (opcional): contraseña del usuario SQL auth.
+- `AZURE_TENANT_ID` (opcional): tenant Entra ID para Service Principal AAD.
 - `AZURE_CLIENT_ID` (opcional): Application (client) ID de App Registration.
 - `AZURE_CLIENT_SECRET` (opcional): client secret de App Registration.
-- `ONELAKE_WORKSPACE_NAME` (opcional): fallback para `DATA_FABRIC_DATABASE`.
-- `DATA_FABRIC_SCHEMA_HINT` (opcional): contexto de tablas/columnas para mejorar SQL generado.
-- `DATA_FABRIC_ALLOWED_SCHEMA` (opcional): esquema permitido para consultas SQL generadas. Default: `dbo`.
-- `DATA_FABRIC_MAX_ROWS` (opcional): límite de filas retornadas al prompt final, default `100`.
-- `DATA_FABRIC_TIMEOUT_SECONDS` (opcional): timeout de consulta SQL, default `30`.
+- `DB_ALLOWED_SCHEMA` (opcional): esquema permitido para consultas SQL generadas. Default: `dbo`.
+- `DB_ALLOWED_TABLE` (opcional): tabla permitida. Default: `fact_presupuesto_gold`.
+- `DB_SCHEMA_HINT` (opcional): contexto de tablas/columnas para mejorar SQL generado.
+- `DB_MAX_ROWS` (opcional): límite de filas retornadas al prompt final. Default: `100`.
+- `DB_TIMEOUT_SECONDS` (opcional): timeout de consulta SQL. Default: `30`.
 
-### Modos de conexión a Data Fabric
+### Modos de conexión a SQL Server
 
-- Modo 1 (cadena completa): usa `DATA_FABRIC_CONNECTION_STRING`.
-- Modo 2 (App Registration): usa `DATA_FABRIC_SERVER` + `DATA_FABRIC_DATABASE` + `AZURE_TENANT_ID` + `AZURE_CLIENT_ID` + `AZURE_CLIENT_SECRET`.
+El proxy activa el flujo SQL cuando se detecta alguna de estas configuraciones (en orden de prioridad):
 
-### Ejemplo para Google Gemini
+**Modo 1 — Connection String:**
+```
+DB_CONNECTION_STRING=Server=tcp:financialfibot.database.windows.net,1433;Database=midb;User ID=financialfibot;Password=<password>;Encrypt=true;TrustServerCertificate=false;
+```
 
-- `AI_PROVIDER=gemini`
-- `AI_API_URL=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`
-- `AI_API_KEY=<TU_GEMINI_API_KEY>`
-- `AI_AUTH_HEADER=x-goog-api-key`
-- `AI_MODEL=` (vacío, porque ya va en la URL)
-- `ALLOWED_ORIGIN=https://tu-dominio-frontend.com`
+**Modo 2 — SQL Auth (usuario/contraseña):**
+```
+DB_SERVER=financialfibot.database.windows.net,1433
+DB_DATABASE=midb
+DB_USER=financialfibot
+DB_PASSWORD=<password>
+```
 
-### Ejemplo para flujo Data Fabric
+**Modo 3 — Service Principal (Azure AAD):**
+```
+DB_SERVER=financialfibot.database.windows.net,1433
+DB_DATABASE=midb
+AZURE_TENANT_ID=<tenant-id>
+AZURE_CLIENT_ID=<app-client-id>
+AZURE_CLIENT_SECRET=<client-secret>
+```
 
-- `AI_PROVIDER=gemini`
-- `AI_API_URL=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`
-- `AI_API_KEY=<TU_GEMINI_API_KEY>`
-- `AI_AUTH_HEADER=x-goog-api-key`
-- `DATA_FABRIC_CONNECTION_STRING=Server=tcp:<server>.datawarehouse.fabric.microsoft.com,1433;Database=<db>;User ID=<user>;Password=<password>;Encrypt=true;TrustServerCertificate=false;`
-- `DATA_FABRIC_SCHEMA_HINT=Tabla Ventas(fecha, monto, categoria), Tabla Clientes(id, segmento)`
-- `DATA_FABRIC_ALLOWED_SCHEMA=dbo`
-- `DATA_FABRIC_MAX_ROWS=100`
-- `DATA_FABRIC_TIMEOUT_SECONDS=30`
+Si ninguna configuración de BD está presente, el proxy opera en modo chat directo (sin consultas SQL).
 
-### Ejemplo para flujo Data Fabric con App Registration (sin connection string)
+## Ejemplos de configuración completa
 
-- `AI_PROVIDER=gemini`
-- `AI_API_URL=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`
-- `AI_API_KEY=<TU_GEMINI_API_KEY>`
-- `AI_AUTH_HEADER=x-goog-api-key`
-- `DATA_FABRIC_SERVER=xxxxxx-xxxxxxxx.datawarehouse.fabric.microsoft.com`
-- `DATA_FABRIC_DATABASE=<NOMBRE_WAREHOUSE_O_DATABASE>`
-- `AZURE_TENANT_ID=<tenant-id>`
-- `AZURE_CLIENT_ID=<app-client-id>`
-- `AZURE_CLIENT_SECRET=<client-secret>`
-- `ONELAKE_WORKSPACE_NAME=Fibot` (opcional, fallback para database)
-- `DATA_FABRIC_SCHEMA_HINT=Tabla Ventas(fecha, monto, categoria), Tabla Clientes(id, segmento)`
-- `DATA_FABRIC_ALLOWED_SCHEMA=dbo`
-- `DATA_FABRIC_MAX_ROWS=100`
-- `DATA_FABRIC_TIMEOUT_SECONDS=30`
+### Azure SQL + Google Gemini (SQL Auth)
+
+```
+AI_PROVIDER=gemini
+AI_API_URL=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent
+AI_API_KEY=<TU_GEMINI_API_KEY>
+AI_AUTH_HEADER=x-goog-api-key
+ALLOWED_ORIGIN=https://tu-dominio-frontend.com
+DB_SERVER=financialfibot.database.windows.net,1433
+DB_DATABASE=midb
+DB_USER=financialfibot
+DB_PASSWORD=<password>
+DB_ALLOWED_SCHEMA=dbo
+DB_ALLOWED_TABLE=fact_presupuesto_gold
+DB_MAX_ROWS=100
+DB_TIMEOUT_SECONDS=30
+```
+
+### Azure SQL + Google Gemini (Connection String)
+
+```
+AI_PROVIDER=gemini
+AI_API_URL=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent
+AI_API_KEY=<TU_GEMINI_API_KEY>
+AI_AUTH_HEADER=x-goog-api-key
+DB_CONNECTION_STRING=Server=tcp:financialfibot.database.windows.net,1433;Database=midb;User ID=financialfibot;Password=<password>;Encrypt=true;TrustServerCertificate=false;
+DB_ALLOWED_SCHEMA=dbo
+DB_ALLOWED_TABLE=fact_presupuesto_gold
+```
+
+### Azure SQL + Service Principal (sin contraseña de usuario)
+
+```
+AI_PROVIDER=gemini
+AI_API_URL=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent
+AI_API_KEY=<TU_GEMINI_API_KEY>
+AI_AUTH_HEADER=x-goog-api-key
+DB_SERVER=financialfibot.database.windows.net,1433
+DB_DATABASE=midb
+AZURE_TENANT_ID=<tenant-id>
+AZURE_CLIENT_ID=<app-client-id>
+AZURE_CLIENT_SECRET=<client-secret>
+DB_ALLOWED_SCHEMA=dbo
+DB_ALLOWED_TABLE=fact_presupuesto_gold
+```
+
+### Chat directo (sin base de datos)
+
+```
+AI_PROVIDER=gemini
+AI_API_URL=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent
+AI_API_KEY=<TU_GEMINI_API_KEY>
+AI_AUTH_HEADER=x-goog-api-key
+ALLOWED_ORIGIN=https://tu-dominio-frontend.com
+```
 
 ## Compilar
 
@@ -84,8 +134,6 @@ Desde la raíz del proyecto:
 ```bash
 npm run build:proxy
 ```
-
-> Incluye `mssql` en el paquete de Lambda para poder ejecutar consultas en Fabric.
 
 Salida compilada:
 
@@ -97,13 +145,13 @@ Salida compilada:
 npm run package:proxy
 ```
 
-Este comando genera `backend-proxy/lambda.zip` incluyendo `index.js` y dependencias runtime (`mssql` y transitivas), evitando errores como `Cannot find module 'mssql'`.
+Genera `backend-proxy/lambda.zip` incluyendo `index.js` y dependencias runtime.
 
 ## Configuración correcta de Lambda
 
 - Runtime: `Node.js 20.x`.
 - Handler: `index.handler`.
-- Este proyecto compila a CommonJS, por lo que evita el error `Unexpected token 'export'`.
+- Compila a CommonJS.
 
 ## Despliegue rápido con AWS CLI
 
@@ -123,24 +171,10 @@ aws lambda create-function \
   --handler index.handler \
   --zip-file fileb://backend-proxy/lambda.zip \
   --role arn:aws:iam::<ACCOUNT_ID>:role/fibot-lambda-role \
-  --environment "Variables={AI_API_URL=<URL>,AI_API_KEY=<KEY>,AI_MODEL=<MODEL>,ALLOWED_ORIGIN=https://tudominio.com}"
+  --environment "Variables={AI_API_URL=<URL>,AI_API_KEY=<KEY>,ALLOWED_ORIGIN=https://tudominio.com,DB_SERVER=financialfibot.database.windows.net,1433,DB_DATABASE=<db>,DB_USER=<user>,DB_PASSWORD=<pass>}"
 ```
 
-3. Crear API Gateway HTTP API e integración con Lambda:
-
-```bash
-aws apigatewayv2 create-api --name fibot-ai-proxy-api --protocol-type HTTP
-```
-
-Después crea:
-- integración Lambda,
-- ruta `POST /chat`,
-- ruta `OPTIONS /chat` (o CORS automático en HTTP API),
-- stage (por ejemplo `prod`).
-
-4. Conectar frontend:
-
-En `.env` del frontend:
+3. Conectar frontend en `.env`:
 
 ```bash
 VITE_AI_API_URL=https://<api-id>.execute-api.<region>.amazonaws.com/prod/chat
@@ -149,11 +183,7 @@ VITE_AI_MODEL=
 VITE_AI_AUTH_HEADER=Authorization
 ```
 
-> Cuando usas este proxy, normalmente `VITE_AI_API_KEY` queda vacío porque la key vive solo en Lambda.
-
 ## Actualización de código
-
-Cada despliegue nuevo:
 
 ```bash
 npm run build:proxy
@@ -163,6 +193,6 @@ aws lambda update-function-code --function-name fibot-ai-proxy --zip-file fileb:
 
 ## Recomendaciones de seguridad
 
-- Guarda `AI_API_KEY` en AWS Secrets Manager o SSM Parameter Store.
+- Guarda `AI_API_KEY` y `DB_PASSWORD` en AWS Secrets Manager o SSM Parameter Store.
 - Restringe `ALLOWED_ORIGIN` a tu dominio real.
 - Habilita CloudWatch Logs y alertas de error.

@@ -2,11 +2,6 @@ import sql from 'mssql'
 
 type ChatRole = 'system' | 'user' | 'assistant'
 
-type UpstreamRequest = {
-  model?: string
-  messages: Array<{ role: ChatRole; content: string }>
-}
-
 type UpstreamResponse = {
   content?: string
   message?: string
@@ -70,17 +65,19 @@ type ProxyConfig = {
   sqlModel: string
   answerModel: string
   provider: Provider
-  dataFabricConnectionString: string
-  dataFabricServer: string
-  dataFabricDatabase: string
+  dbConnectionString: string
+  dbServer: string
+  dbDatabase: string
+  dbUser: string
+  dbPassword: string
   azureTenantId: string
   azureClientId: string
   azureClientSecret: string
-  dataFabricAllowedSchema: string
-  dataFabricAllowedTable: string
-  dataFabricSchemaHint: string
-  dataFabricMaxRows: number
-  dataFabricTimeoutMs: number
+  dbAllowedSchema: string
+  dbAllowedTable: string
+  dbSchemaHint: string
+  dbMaxRows: number
+  dbTimeoutMs: number
 }
 
 type QueryRow = Record<string, unknown>
@@ -259,74 +256,94 @@ function getConfig(): ProxyConfig {
     sqlModel: process.env.AI_SQL_MODEL?.trim() ?? process.env.AI_MODEL?.trim() ?? '',
     answerModel: process.env.AI_ANSWER_MODEL?.trim() ?? process.env.AI_MODEL?.trim() ?? '',
     provider: resolveProvider(),
-    dataFabricConnectionString: process.env.DATA_FABRIC_CONNECTION_STRING?.trim() ?? '',
-    dataFabricServer: process.env.DATA_FABRIC_SERVER?.trim() ?? '',
-    dataFabricDatabase: process.env.DATA_FABRIC_DATABASE?.trim() ?? process.env.ONELAKE_WORKSPACE_NAME?.trim() ?? '',
+    dbConnectionString: process.env.DB_CONNECTION_STRING?.trim() ?? '',
+    dbServer: process.env.DB_SERVER?.trim() ?? '',
+    dbDatabase: process.env.DB_DATABASE?.trim() ?? '',
+    dbUser: process.env.DB_USER?.trim() ?? '',
+    dbPassword: process.env.DB_PASSWORD?.trim() ?? '',
     azureTenantId: process.env.AZURE_TENANT_ID?.trim() ?? '',
     azureClientId: process.env.AZURE_CLIENT_ID?.trim() ?? '',
     azureClientSecret: process.env.AZURE_CLIENT_SECRET?.trim() ?? '',
-    dataFabricAllowedSchema: process.env.DATA_FABRIC_ALLOWED_SCHEMA?.trim() ?? 'dbo',
-    dataFabricAllowedTable: process.env.DATA_FABRIC_ALLOWED_TABLE?.trim() ?? 'fact_presupuesto_gold',
-    dataFabricSchemaHint: process.env.DATA_FABRIC_SCHEMA_HINT?.trim() ?? '',
-    dataFabricMaxRows: parsePositiveInt(process.env.DATA_FABRIC_MAX_ROWS, 100),
-    dataFabricTimeoutMs: parsePositiveInt(process.env.DATA_FABRIC_TIMEOUT_SECONDS, 30) * 1000,
+    dbAllowedSchema: process.env.DB_ALLOWED_SCHEMA?.trim() ?? 'dbo',
+    dbAllowedTable: process.env.DB_ALLOWED_TABLE?.trim() ?? 'fact_presupuesto_gold',
+    dbSchemaHint: process.env.DB_SCHEMA_HINT?.trim() ?? '',
+    dbMaxRows: parsePositiveInt(process.env.DB_MAX_ROWS, 100),
+    dbTimeoutMs: parsePositiveInt(process.env.DB_TIMEOUT_SECONDS, 30) * 1000,
   }
 }
 
-function normalizeFabricServer(server: string) {
+function normalizeDbServer(server: string) {
   const trimmed = server.trim()
   if (!trimmed) return ''
 
   const noProtocol = trimmed.replace(/^tcp:/i, '').replace(/^https?:\/\//i, '')
-  const noPort = noProtocol.replace(/:\d+$/, '')
+  const noPort = noProtocol.replace(/,\d+$/, '').replace(/:\d+$/, '')
   return noPort.replace(/\/$/, '')
+}
+
+function hasSqlAuthConfig(config: ProxyConfig) {
+  return Boolean(config.dbServer && config.dbDatabase && config.dbUser && config.dbPassword)
 }
 
 function hasServicePrincipalConfig(config: ProxyConfig) {
   return Boolean(
-    config.dataFabricServer &&
-      config.dataFabricDatabase &&
+    config.dbServer &&
+      config.dbDatabase &&
       config.azureTenantId &&
       config.azureClientId &&
       config.azureClientSecret,
   )
 }
 
-function resolveDataFabricPoolConfig(config: ProxyConfig): string | sql.config {
-  if (config.dataFabricConnectionString) {
-    return config.dataFabricConnectionString
+function resolveDbPoolConfig(config: ProxyConfig): string | sql.config {
+  if (config.dbConnectionString) {
+    return config.dbConnectionString
   }
 
-  if (!hasServicePrincipalConfig(config)) {
-    throw new Error(
-      'Falta configuración de Data Fabric. Define DATA_FABRIC_CONNECTION_STRING o usa DATA_FABRIC_SERVER, DATA_FABRIC_DATABASE, AZURE_TENANT_ID, AZURE_CLIENT_ID y AZURE_CLIENT_SECRET.',
-    )
-  }
-
-  return {
-    server: normalizeFabricServer(config.dataFabricServer),
-    database: config.dataFabricDatabase,
-    port: 1433,
-    options: {
-      encrypt: true,
-      trustServerCertificate: false,
-    },
-    authentication: {
-      type: 'azure-active-directory-service-principal-secret',
+  if (hasSqlAuthConfig(config)) {
+    return {
+      server: normalizeDbServer(config.dbServer),
+      database: config.dbDatabase,
+      port: 1433,
+      user: config.dbUser,
+      password: config.dbPassword,
       options: {
-        tenantId: config.azureTenantId,
-        clientId: config.azureClientId,
-        clientSecret: config.azureClientSecret,
+        encrypt: true,
+        trustServerCertificate: false,
       },
-    },
+    }
   }
+
+  if (hasServicePrincipalConfig(config)) {
+    return {
+      server: normalizeDbServer(config.dbServer),
+      database: config.dbDatabase,
+      port: 1433,
+      options: {
+        encrypt: true,
+        trustServerCertificate: false,
+      },
+      authentication: {
+        type: 'azure-active-directory-service-principal-secret',
+        options: {
+          tenantId: config.azureTenantId,
+          clientId: config.azureClientId,
+          clientSecret: config.azureClientSecret,
+        },
+      },
+    }
+  }
+
+  throw new Error(
+    'Falta configuración de base de datos. Define DB_CONNECTION_STRING, o bien DB_SERVER + DB_DATABASE + DB_USER + DB_PASSWORD (SQL auth), o DB_SERVER + DB_DATABASE + AZURE_TENANT_ID + AZURE_CLIENT_ID + AZURE_CLIENT_SECRET (Service Principal).',
+  )
 }
 
-function resolveDataFabricTarget(config: ProxyConfig) {
-  if (config.dataFabricConnectionString) {
-    const serverMatch = /(?:^|;)\s*server\s*=\s*([^;]+)/i.exec(config.dataFabricConnectionString)
+function resolveDbTarget(config: ProxyConfig) {
+  if (config.dbConnectionString) {
+    const serverMatch = /(?:^|;)\s*(?:server|data source)\s*=\s*([^;]+)/i.exec(config.dbConnectionString)
     const databaseMatch = /(?:^|;)\s*(?:database|initial catalog)\s*=\s*([^;]+)/i.exec(
-      config.dataFabricConnectionString,
+      config.dbConnectionString,
     )
 
     return {
@@ -336,8 +353,8 @@ function resolveDataFabricTarget(config: ProxyConfig) {
   }
 
   return {
-    server: normalizeFabricServer(config.dataFabricServer),
-    database: config.dataFabricDatabase,
+    server: normalizeDbServer(config.dbServer),
+    database: config.dbDatabase,
   }
 }
 
@@ -346,13 +363,13 @@ function isInvalidObjectNameError(message: string) {
 }
 
 function normalizeSqlIdentifier(identifier: string) {
-  return identifier.replace(/[\[\]"`]/g, '').trim().toLowerCase()
+  return identifier.replaceAll(/[[\]"`]/g, '').trim().toLowerCase()
 }
 
 function resolveBaseTableName(identifier: string) {
   const normalized = normalizeSqlIdentifier(identifier)
   const segments = normalized.split('.').filter(Boolean)
-  return segments[segments.length - 1] ?? ''
+  return segments.at(-1) ?? ''
 }
 
 function resolveSchemaAndTable(identifier: string) {
@@ -362,19 +379,19 @@ function resolveSchemaAndTable(identifier: string) {
   if (segments.length < 2) {
     return {
       schema: '',
-      table: segments[segments.length - 1] ?? '',
+      table: segments.at(-1) ?? '',
     }
   }
 
   return {
-    schema: segments[segments.length - 2] ?? '',
-    table: segments[segments.length - 1] ?? '',
+    schema: segments.at(-2) ?? '',
+    table: segments.at(-1) ?? '',
   }
 }
 
 function extractTableReferences(sqlQuery: string) {
   const references: string[] = []
-  const regex = /\b(?:from|join)\s+([a-z0-9_\.\[\]"`]+)/gi
+  const regex = /\b(?:from|join)\s+([a-z0-9_.[\]"`]+)/gi
 
   let match = regex.exec(sqlQuery)
   while (match) {
@@ -390,7 +407,7 @@ function validateAllowedTableUsage(sqlQuery: string, allowedSchema: string, allo
   const normalizedAllowedTable = resolveBaseTableName(allowedTable)
 
   if (!normalizedAllowedSchema || !normalizedAllowedTable) {
-    throw new Error('DATA_FABRIC_ALLOWED_TABLE está vacío o inválido.')
+    throw new Error('DB_ALLOWED_TABLE está vacío o inválido.')
   }
 
   const references = extractTableReferences(sqlQuery)
@@ -447,19 +464,19 @@ function buildSchemaHintFromRows(rows: SchemaRow[]) {
 
   if (!lines.length) return ''
 
-  return ['Tablas disponibles en Data Fabric (usa solo estas):', ...lines].join('\n')
+  return ['Tablas disponibles en la base de datos (usa solo estas):', ...lines].join('\n')
 }
 
 async function discoverSchemaHint(config: ProxyConfig) {
-  const fabricPoolConfig = resolveDataFabricPoolConfig(config)
-  const pool = new sql.ConnectionPool(fabricPoolConfig)
+  const dbPoolConfig = resolveDbPoolConfig(config)
+  const pool = new sql.ConnectionPool(dbPoolConfig)
 
   try {
     await pool.connect()
     const result = await pool
       .request()
-      .input('allowedSchema', sql.NVarChar(256), config.dataFabricAllowedSchema)
-      .input('allowedTable', sql.NVarChar(256), config.dataFabricAllowedTable)
+      .input('allowedSchema', sql.NVarChar(256), config.dbAllowedSchema)
+      .input('allowedTable', sql.NVarChar(256), config.dbAllowedTable)
       .query(`
       SELECT TOP (800)
         TABLE_SCHEMA,
@@ -609,7 +626,7 @@ function validateReadOnlySql(sqlQuery: string) {
 async function generateSqlFromQuestion(config: ProxyConfig, question: string, schemaHint: string, previousError?: string) {
   const systemPrompt = [
     // === ROL Y ALCANCE ===
-  `Eres un asistente experto en SQL T-SQL para Microsoft Fabric Warehouse.
+  `Eres un asistente experto en SQL T-SQL para SQL Server.
 Tu única función es convertir preguntas de negocio en consultas SQL de solo lectura.`,
 
   // === RESTRICCIONES DE SEGURIDAD (no negociables) ===
@@ -617,12 +634,12 @@ Tu única función es convertir preguntas de negocio en consultas SQL de solo le
 - Solo puedes generar sentencias SELECT o WITH ... SELECT.
 - Prohibido usar: INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, MERGE, EXEC.
 - Prohibido generar múltiples sentencias separadas por punto y coma.
-- Prohibido usar subconsultas o JOINs a tablas distintas a [${config.dataFabricAllowedSchema}].[${config.dataFabricAllowedTable}].
+- Prohibido usar subconsultas o JOINs a tablas distintas a [${config.dbAllowedSchema}].[${config.dbAllowedTable}].
 - Si la pregunta no puede responderse con una consulta de lectura, responde: "No puedo generar esa consulta."`,
 
   // === TABLA PERMITIDA ===
-  `TABLA ÚNICA PERMITIDA: [${config.dataFabricAllowedSchema}].[${config.dataFabricAllowedTable}]
-- Siempre califica con esquema. Ejemplo: FROM [${config.dataFabricAllowedSchema}].[${config.dataFabricAllowedTable}]
+  `TABLA ÚNICA PERMITIDA: [${config.dbAllowedSchema}].[${config.dbAllowedTable}]
+- Siempre califica con esquema. Ejemplo: FROM [${config.dbAllowedSchema}].[${config.dbAllowedTable}]
 - No uses ninguna otra tabla, vista o función de tabla.
 - Nunca uses referencias sin esquema.`,
 
@@ -651,7 +668,7 @@ Usa ÚNICAMENTE los nombres de columna listados aquí. Respeta mayúsculas/minú
 
 1. FILTROS POR SUBGRUPO
    - Los valores de [Subgrupo] están en MAYÚSCULAS. Ej: WHERE [Subgrupo] = 'NOMINA'
-   - Para listar subgrupos disponibles: SELECT DISTINCT [Subgrupo] FROM [${config.dataFabricAllowedSchema}].[${config.dataFabricAllowedTable}]
+   - Para listar subgrupos disponibles: SELECT DISTINCT [Subgrupo] FROM [${config.dbAllowedSchema}].[${config.dbAllowedTable}]
 
 2. TOTALES Y AGRUPACIONES
    - Usa SUM() para agregar valores cuando se pidan totales.
@@ -665,10 +682,10 @@ Usa ÚNICAMENTE los nombres de columna listados aquí. Respeta mayúsculas/minú
 
 4. CÁLCULO DE EBITDA
    EBITDA = Ingresos - Gastos directos - Otros costos y gastos + Depreciaciones y Amortizaciones
-   
+
    Patrón recomendado:
    SELECT [grupogerencial], SUM([total_valor]) AS total
-   FROM [${config.dataFabricAllowedSchema}].[${config.dataFabricAllowedTable}]
+   FROM [${config.dbAllowedSchema}].[${config.dbAllowedTable}]
    WHERE [ano] = <año solicitado>
    GROUP BY [grupogerencial]
    -- (El cálculo de EBITDA se hace en la capa de aplicación sumando/restando los grupos)
@@ -699,34 +716,34 @@ Usa ÚNICAMENTE los nombres de columna listados aquí. Respeta mayúsculas/minú
 
   const sqlCandidate = extractSqlCandidate(sqlDraft)
   const readOnlySql = validateReadOnlySql(sqlCandidate)
-  validateAllowedTableUsage(readOnlySql, config.dataFabricAllowedSchema, config.dataFabricAllowedTable)
+  validateAllowedTableUsage(readOnlySql, config.dbAllowedSchema, config.dbAllowedTable)
   return readOnlySql
 }
 
 async function executeSqlQuery(config: ProxyConfig, sqlQuery: string) {
-  const fabricPoolConfig = resolveDataFabricPoolConfig(config)
-  const target = resolveDataFabricTarget(config)
-  const pool = new sql.ConnectionPool(fabricPoolConfig)
+  const dbPoolConfig = resolveDbPoolConfig(config)
+  const target = resolveDbTarget(config)
+  const pool = new sql.ConnectionPool(dbPoolConfig)
 
   try {
     await pool.connect()
     const request = pool.request()
     const timeoutPromise = new Promise<never>((_, reject) => {
       setTimeout(() => {
-        reject(new Error(`La consulta SQL excedió el timeout de ${config.dataFabricTimeoutMs} ms.`))
-      }, config.dataFabricTimeoutMs)
+        reject(new Error(`La consulta SQL excedió el timeout de ${config.dbTimeoutMs} ms.`))
+      }, config.dbTimeoutMs)
     })
 
     const result = await Promise.race([request.query(sqlQuery), timeoutPromise])
     const records = (result.recordset ?? []) as QueryRow[]
-    return records.slice(0, config.dataFabricMaxRows)
+    return records.slice(0, config.dbMaxRows)
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Error desconocido al consultar Data Fabric.'
+    const message = error instanceof Error ? error.message : 'Error desconocido al consultar la base de datos.'
 
     if (/database was not found|insufficient permissions to connect to it|login failed/i.test(message)) {
       throw new Error(
         `${message} (target: server=${target.server}, database=${target.database}). ` +
-          'Verifica que DATA_FABRIC_DATABASE sea el nombre exacto del Warehouse/SQL endpoint y que el Service Principal tenga permisos de acceso y lectura.',
+          'Verifica que DB_DATABASE sea el nombre exacto de la base de datos y que el usuario tenga permisos de acceso y lectura.',
       )
     }
 
@@ -898,14 +915,14 @@ async function handleDirectChat(
   return { message }
 }
 
-async function handleDataFabricAgentFlow(
+async function handleDbAgentFlow(
   config: ProxyConfig,
   messages: Array<{ role: ChatRole; content: string }>,
   language: Language,
 ) {
   const question = getLastUserQuestion(messages)
   const discoveredSchemaHint = await discoverSchemaHint(config)
-  const baseSchemaHint = [config.dataFabricSchemaHint, discoveredSchemaHint].filter(Boolean).join('\n\n').trim()
+  const baseSchemaHint = [config.dbSchemaHint, discoveredSchemaHint].filter(Boolean).join('\n\n').trim()
 
   let sqlQuery = await generateSqlFromQuestion(config, question, baseSchemaHint)
   let rows: QueryRow[] = []
@@ -920,7 +937,7 @@ async function handleDataFabricAgentFlow(
     }
 
     const retrySchemaHint = await discoverSchemaHint(config)
-    const mergedRetryHint = [config.dataFabricSchemaHint, retrySchemaHint].filter(Boolean).join('\n\n').trim()
+    const mergedRetryHint = [config.dbSchemaHint, retrySchemaHint].filter(Boolean).join('\n\n').trim()
 
     sqlQuery = await generateSqlFromQuestion(config, question, mergedRetryHint, firstError)
     rows = await executeSqlQuery(config, sqlQuery)
@@ -933,7 +950,7 @@ async function handleDataFabricAgentFlow(
     meta: {
       sql: sqlQuery,
       rows: rows.length,
-      source: 'data-fabric',
+      source: 'sql-db',
     },
   }
 }
@@ -975,15 +992,17 @@ export async function handler(event: LambdaEvent): Promise<LambdaResult> {
     const parsed = JSON.parse(event.body ?? '{}') as IncomingBody
     const messages = resolveIncomingMessages(parsed)
     const language = resolveLanguage(parsed.language)
-    const useDataFabricFlow = Boolean(config.dataFabricConnectionString || hasServicePrincipalConfig(config))
+    const useDbFlow = Boolean(
+      config.dbConnectionString || hasSqlAuthConfig(config) || hasServicePrincipalConfig(config),
+    )
 
-    if (!useDataFabricFlow) {
+    if (!useDbFlow) {
       const directResult = await handleDirectChat(config, parsed, messages, language)
       return jsonResponse(200, directResult, allowedOrigin)
     }
 
-    const dataFabricResult = await handleDataFabricAgentFlow(config, messages, language)
-    return jsonResponse(200, dataFabricResult, allowedOrigin)
+    const dbResult = await handleDbAgentFlow(config, messages, language)
+    return jsonResponse(200, dbResult, allowedOrigin)
   } catch (error) {
     const safeMessage = error instanceof Error ? error.message : 'Error inesperado del proxy.'
     return jsonResponse(400, { error: safeMessage }, allowedOrigin)
