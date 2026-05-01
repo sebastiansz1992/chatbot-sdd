@@ -995,14 +995,14 @@ async function handleDbAgentFlow(
   }
 }
 
-// ─── Lambda handler ──────────────────────────────────────────────────────────
+// ─── Core request processor (platform-agnostic) ──────────────────────────────
 
-export async function handler(event: LambdaEvent): Promise<LambdaResult> {
+async function processRequest(method: string, bodyText: string): Promise<LambdaResult> {
   const allowedOrigin = process.env.ALLOWED_ORIGIN?.trim() || '*'
-  const method = event.httpMethod ?? 'POST'
+  const upperMethod = method.toUpperCase()
 
-  if (method === 'OPTIONS') return jsonResponse(204, {}, allowedOrigin)
-  if (method !== 'POST') return jsonResponse(405, { error: 'Método no permitido.' }, allowedOrigin)
+  if (upperMethod === 'OPTIONS') return jsonResponse(204, {}, allowedOrigin)
+  if (upperMethod !== 'POST') return jsonResponse(405, { error: 'Método no permitido.' }, allowedOrigin)
 
   const config = getConfig()
 
@@ -1011,7 +1011,7 @@ export async function handler(event: LambdaEvent): Promise<LambdaResult> {
   }
 
   try {
-    const parsed = JSON.parse(event.body ?? '{}') as IncomingBody
+    const parsed = JSON.parse(bodyText || '{}') as IncomingBody
     const messages = resolveIncomingMessages(parsed)
     const language = resolveLanguage(parsed.language)
 
@@ -1019,13 +1019,59 @@ export async function handler(event: LambdaEvent): Promise<LambdaResult> {
       config.dbConnectionString || hasSqlAuthConfig(config) || hasServicePrincipalConfig(config),
     )
 
-    if (!useDbFlow) {
-      return jsonResponse(200, await handleDirectChat(config, parsed, messages, language), allowedOrigin)
-    }
+    const result = useDbFlow
+      ? await handleDbAgentFlow(config, messages, language)
+      : await handleDirectChat(config, parsed, messages, language)
 
-    return jsonResponse(200, await handleDbAgentFlow(config, messages, language), allowedOrigin)
+    return jsonResponse(200, result, allowedOrigin)
   } catch (error) {
     const safeMessage = error instanceof Error ? error.message : 'Error inesperado del proxy.'
     return jsonResponse(400, { error: safeMessage }, allowedOrigin)
   }
 }
+
+// ─── AWS Lambda adapter ───────────────────────────────────────────────────────
+
+export async function handler(event: LambdaEvent): Promise<LambdaResult> {
+  return processRequest(event.httpMethod ?? 'POST', event.body ?? '{}')
+}
+
+// ─── Azure Functions v4 adapter ───────────────────────────────────────────────
+// Active when @azure/functions is present in node_modules (Azure runtime).
+// Silently skipped on AWS Lambda where the package is not installed.
+
+void (async () => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const azFn = require('@azure/functions') as {
+      app: {
+        http: (
+          name: string,
+          options: {
+            methods: string[]
+            authLevel: string
+            route?: string
+            handler: (req: { method: string; text: () => Promise<string> }) => Promise<{
+              status: number
+              headers: Record<string, string>
+              body: string
+            }>
+          },
+        ) => void
+      }
+    }
+
+    azFn.app.http('fibotProxy', {
+      methods: ['POST', 'OPTIONS'],
+      authLevel: 'anonymous',
+      route: 'chat',
+      handler: async (req) => {
+        const body = await req.text()
+        const result = await processRequest(req.method, body)
+        return { status: result.statusCode, headers: result.headers, body: result.body }
+      },
+    })
+  } catch {
+    // @azure/functions not installed — running in AWS Lambda mode
+  }
+})()
