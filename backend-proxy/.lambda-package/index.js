@@ -20,11 +20,31 @@ const DANGEROUS_SQL_KEYWORDS = [
     /\bexec\b/i,
     /\bexecute\b/i,
 ];
+// ─── helpers ────────────────────────────────────────────────────────────────
 function resolveProvider() {
     const configured = process.env.AI_PROVIDER?.trim().toLowerCase();
     if (configured === 'gemini')
         return 'gemini';
     return 'openai-compatible';
+}
+function parsePositiveInt(value, fallback) {
+    if (!value)
+        return fallback;
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0)
+        return fallback;
+    return parsed;
+}
+function parseAllowedTables(multiTable, singleTable) {
+    if (multiTable) {
+        return multiTable
+            .split(',')
+            .map((t) => t.trim().toLowerCase())
+            .filter(Boolean);
+    }
+    if (singleTable)
+        return [singleTable.trim().toLowerCase()];
+    return [];
 }
 function jsonResponse(statusCode, body, allowedOrigin) {
     return {
@@ -38,107 +58,7 @@ function jsonResponse(statusCode, body, allowedOrigin) {
         body: JSON.stringify(body),
     };
 }
-function sanitizeMessages(value) {
-    if (!Array.isArray(value)) {
-        throw new TypeError('messages debe ser un arreglo.');
-    }
-    const sanitized = value
-        .filter((item) => item && typeof item === 'object')
-        .map((item) => {
-        const role = item.role;
-        const content = item.content;
-        if (typeof role !== 'string' || !ALLOWED_ROLES.has(role)) {
-            throw new TypeError('Cada mensaje debe incluir un role válido.');
-        }
-        if (typeof content !== 'string' || !content.trim()) {
-            throw new TypeError('Cada mensaje debe incluir content no vacío.');
-        }
-        return {
-            role: role,
-            content: content.trim(),
-        };
-    });
-    if (!sanitized.length) {
-        throw new TypeError('Debe enviarse al menos un mensaje.');
-    }
-    return sanitized;
-}
-function sanitizeGeminiContents(value) {
-    if (!Array.isArray(value)) {
-        throw new TypeError('contents debe ser un arreglo.');
-    }
-    const normalized = value
-        .filter((item) => item && typeof item === 'object')
-        .map((item) => {
-        const role = item.role;
-        const firstPart = Array.isArray(item.parts) ? item.parts[0] : undefined;
-        const text = firstPart?.text;
-        if (typeof role !== 'string' || (role !== 'user' && role !== 'model')) {
-            throw new TypeError('Cada item en contents debe incluir role user o model.');
-        }
-        if (typeof text !== 'string' || !text.trim()) {
-            throw new TypeError('Cada item en contents debe incluir parts[0].text no vacío.');
-        }
-        return {
-            role: role === 'model' ? 'assistant' : 'user',
-            content: text.trim(),
-        };
-    });
-    if (!normalized.length) {
-        throw new TypeError('Debe enviarse al menos un elemento en contents.');
-    }
-    return normalized;
-}
-function resolveIncomingMessages(parsed) {
-    if (Array.isArray(parsed.messages)) {
-        return sanitizeMessages(parsed.messages);
-    }
-    if (Array.isArray(parsed.contents)) {
-        return sanitizeGeminiContents(parsed.contents);
-    }
-    throw new TypeError('Debes enviar messages o contents en el body.');
-}
-function resolveAssistantText(payload) {
-    if (payload.content?.trim())
-        return payload.content.trim();
-    if (payload.message?.trim())
-        return payload.message.trim();
-    if (payload.output_text?.trim())
-        return payload.output_text.trim();
-    const choiceText = payload.choices?.[0]?.message?.content?.trim();
-    if (choiceText)
-        return choiceText;
-    const geminiText = payload.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    if (geminiText)
-        return geminiText;
-    throw new Error('El proveedor IA no devolvió contenido legible.');
-}
-function mapMessagesForGemini(messages) {
-    const systemMessages = messages.filter((message) => message.role === 'system');
-    const conversationMessages = messages.filter((message) => message.role !== 'system');
-    const contents = conversationMessages.map((message) => ({
-        role: message.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: message.content }],
-    }));
-    return {
-        ...(systemMessages.length
-            ? {
-                systemInstruction: {
-                    parts: [{ text: systemMessages.map((message) => message.content).join('\n') }],
-                },
-            }
-            : {}),
-        contents,
-    };
-}
-function parsePositiveInt(value, fallback) {
-    if (!value)
-        return fallback;
-    const parsed = Number.parseInt(value, 10);
-    if (!Number.isFinite(parsed) || parsed <= 0)
-        return fallback;
-    return parsed;
-}
+// ─── config ─────────────────────────────────────────────────────────────────
 function getConfig() {
     return {
         apiUrl: process.env.AI_API_URL?.trim(),
@@ -157,12 +77,146 @@ function getConfig() {
         azureClientId: process.env.AZURE_CLIENT_ID?.trim() ?? '',
         azureClientSecret: process.env.AZURE_CLIENT_SECRET?.trim() ?? '',
         dbAllowedSchema: process.env.DB_ALLOWED_SCHEMA?.trim() ?? 'dbo',
-        dbAllowedTable: process.env.DB_ALLOWED_TABLE?.trim() ?? 'fact_presupuesto_gold',
+        dbAllowedTables: parseAllowedTables(process.env.DB_ALLOWED_TABLES?.trim() ?? '', process.env.DB_ALLOWED_TABLE?.trim() ?? ''),
         dbSchemaHint: process.env.DB_SCHEMA_HINT?.trim() ?? '',
         dbMaxRows: parsePositiveInt(process.env.DB_MAX_ROWS, 100),
         dbTimeoutMs: parsePositiveInt(process.env.DB_TIMEOUT_SECONDS, 30) * 1000,
     };
 }
+// ─── input sanitization ─────────────────────────────────────────────────────
+function sanitizeMessages(value) {
+    if (!Array.isArray(value))
+        throw new TypeError('messages debe ser un arreglo.');
+    const sanitized = value
+        .filter((item) => item && typeof item === 'object')
+        .map((item) => {
+        const role = item.role;
+        const content = item.content;
+        if (typeof role !== 'string' || !ALLOWED_ROLES.has(role)) {
+            throw new TypeError('Cada mensaje debe incluir un role válido.');
+        }
+        if (typeof content !== 'string' || !content.trim()) {
+            throw new TypeError('Cada mensaje debe incluir content no vacío.');
+        }
+        return { role: role, content: content.trim() };
+    });
+    if (!sanitized.length)
+        throw new TypeError('Debe enviarse al menos un mensaje.');
+    return sanitized;
+}
+function sanitizeGeminiContents(value) {
+    if (!Array.isArray(value))
+        throw new TypeError('contents debe ser un arreglo.');
+    const normalized = value
+        .filter((item) => item && typeof item === 'object')
+        .map((item) => {
+        const role = item.role;
+        const firstPart = Array.isArray(item.parts) ? item.parts[0] : undefined;
+        const text = firstPart?.text;
+        if (typeof role !== 'string' || (role !== 'user' && role !== 'model')) {
+            throw new TypeError('Cada item en contents debe incluir role user o model.');
+        }
+        if (typeof text !== 'string' || !text.trim()) {
+            throw new TypeError('Cada item en contents debe incluir parts[0].text no vacío.');
+        }
+        return {
+            role: role === 'model' ? 'assistant' : 'user',
+            content: text.trim(),
+        };
+    });
+    if (!normalized.length)
+        throw new TypeError('Debe enviarse al menos un elemento en contents.');
+    return normalized;
+}
+function resolveIncomingMessages(parsed) {
+    if (Array.isArray(parsed.messages))
+        return sanitizeMessages(parsed.messages);
+    if (Array.isArray(parsed.contents))
+        return sanitizeGeminiContents(parsed.contents);
+    throw new TypeError('Debes enviar messages o contents en el body.');
+}
+// ─── AI provider layer ──────────────────────────────────────────────────────
+function resolveAssistantText(payload) {
+    if (payload.content?.trim())
+        return payload.content.trim();
+    if (payload.message?.trim())
+        return payload.message.trim();
+    if (payload.output_text?.trim())
+        return payload.output_text.trim();
+    const choiceText = payload.choices?.[0]?.message?.content?.trim();
+    if (choiceText)
+        return choiceText;
+    const geminiText = payload.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    if (geminiText)
+        return geminiText;
+    throw new Error('El proveedor IA no devolvió contenido legible.');
+}
+function mapMessagesForGemini(messages) {
+    const systemMessages = messages.filter((m) => m.role === 'system');
+    const conversationMessages = messages.filter((m) => m.role !== 'system');
+    const contents = conversationMessages.map((m) => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: m.content }],
+    }));
+    return {
+        ...(systemMessages.length
+            ? { systemInstruction: { parts: [{ text: systemMessages.map((m) => m.content).join('\n') }] } }
+            : {}),
+        contents,
+    };
+}
+function buildRequestBody(provider, messages, model) {
+    if (provider === 'gemini') {
+        return { ...mapMessagesForGemini(messages), ...(model ? { model } : {}) };
+    }
+    return { messages, ...(model ? { model } : {}) };
+}
+function buildHeaders(provider, authHeader, apiKey) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (!apiKey)
+        return headers;
+    if (provider === 'gemini') {
+        headers[authHeader] = apiKey;
+        return headers;
+    }
+    headers[authHeader] = apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`;
+    return headers;
+}
+async function requestUpstream(apiUrl, headers, body) {
+    return fetch(apiUrl, { method: 'POST', headers, body: JSON.stringify(body) });
+}
+async function getUpstreamErrorDetail(response) {
+    try {
+        const payload = (await response.json());
+        const message = payload.error?.message?.trim();
+        const status = payload.error?.status?.trim();
+        if (message && status)
+            return `${status}: ${message}`;
+        if (message)
+            return message;
+    }
+    catch {
+        // fall through
+    }
+    return `El proveedor IA respondió con estado ${response.status}.`;
+}
+async function completeWithAI(config, messages, model) {
+    if (!config.apiUrl)
+        throw new Error('Falta configurar AI_API_URL.');
+    const requestBody = buildRequestBody(config.provider, messages, model);
+    const headers = buildHeaders(config.provider, config.authHeader, config.apiKey);
+    const upstreamResponse = await requestUpstream(config.apiUrl, headers, requestBody);
+    if (!upstreamResponse.ok) {
+        const detail = await getUpstreamErrorDetail(upstreamResponse);
+        const hint = upstreamResponse.status === 429
+            ? 'Revisa cuotas/rate limits en Gemini y confirma billing habilitado.'
+            : undefined;
+        throw new Error(hint ? `${detail} ${hint}` : detail);
+    }
+    const payload = (await upstreamResponse.json());
+    return resolveAssistantText(payload);
+}
+// ─── DB connection ──────────────────────────────────────────────────────────
 function normalizeDbServer(server) {
     const trimmed = server.trim();
     if (!trimmed)
@@ -182,9 +236,8 @@ function hasServicePrincipalConfig(config) {
         config.azureClientSecret);
 }
 function resolveDbPoolConfig(config) {
-    if (config.dbConnectionString) {
+    if (config.dbConnectionString)
         return config.dbConnectionString;
-    }
     if (hasSqlAuthConfig(config)) {
         return {
             server: normalizeDbServer(config.dbServer),
@@ -192,10 +245,7 @@ function resolveDbPoolConfig(config) {
             port: 1433,
             user: config.dbUser,
             password: config.dbPassword,
-            options: {
-                encrypt: true,
-                trustServerCertificate: false,
-            },
+            options: { encrypt: true, trustServerCertificate: false },
         };
     }
     if (hasServicePrincipalConfig(config)) {
@@ -203,10 +253,7 @@ function resolveDbPoolConfig(config) {
             server: normalizeDbServer(config.dbServer),
             database: config.dbDatabase,
             port: 1433,
-            options: {
-                encrypt: true,
-                trustServerCertificate: false,
-            },
+            options: { encrypt: true, trustServerCertificate: false },
             authentication: {
                 type: 'azure-active-directory-service-principal-secret',
                 options: {
@@ -217,7 +264,9 @@ function resolveDbPoolConfig(config) {
             },
         };
     }
-    throw new Error('Falta configuración de base de datos. Define DB_CONNECTION_STRING, o bien DB_SERVER + DB_DATABASE + DB_USER + DB_PASSWORD (SQL auth), o DB_SERVER + DB_DATABASE + AZURE_TENANT_ID + AZURE_CLIENT_ID + AZURE_CLIENT_SECRET (Service Principal).');
+    throw new Error('Falta configuración de base de datos. Define DB_CONNECTION_STRING, o bien ' +
+        'DB_SERVER + DB_DATABASE + DB_USER + DB_PASSWORD (SQL auth), o ' +
+        'DB_SERVER + DB_DATABASE + AZURE_TENANT_ID + AZURE_CLIENT_ID + AZURE_CLIENT_SECRET (Service Principal).');
 }
 function resolveDbTarget(config) {
     if (config.dbConnectionString) {
@@ -228,35 +277,21 @@ function resolveDbTarget(config) {
             database: databaseMatch?.[1]?.trim() ?? '(database-no-detectada)',
         };
     }
-    return {
-        server: normalizeDbServer(config.dbServer),
-        database: config.dbDatabase,
-    };
+    return { server: normalizeDbServer(config.dbServer), database: config.dbDatabase };
 }
-function isInvalidObjectNameError(message) {
-    return /invalid object name/i.test(message);
-}
+// ─── SQL validation ──────────────────────────────────────────────────────────
 function normalizeSqlIdentifier(identifier) {
     return identifier.replaceAll(/[[\]"`]/g, '').trim().toLowerCase();
 }
 function resolveBaseTableName(identifier) {
     const normalized = normalizeSqlIdentifier(identifier);
-    const segments = normalized.split('.').filter(Boolean);
-    return segments.at(-1) ?? '';
+    return normalized.split('.').filter(Boolean).at(-1) ?? '';
 }
 function resolveSchemaAndTable(identifier) {
-    const normalized = normalizeSqlIdentifier(identifier);
-    const segments = normalized.split('.').filter(Boolean);
-    if (segments.length < 2) {
-        return {
-            schema: '',
-            table: segments.at(-1) ?? '',
-        };
-    }
-    return {
-        schema: segments.at(-2) ?? '',
-        table: segments.at(-1) ?? '',
-    };
+    const segments = normalizeSqlIdentifier(identifier).split('.').filter(Boolean);
+    if (segments.length < 2)
+        return { schema: '', table: segments.at(-1) ?? '' };
+    return { schema: segments.at(-2) ?? '', table: segments.at(-1) ?? '' };
 }
 function extractTableReferences(sqlQuery) {
     const references = [];
@@ -268,24 +303,47 @@ function extractTableReferences(sqlQuery) {
     }
     return references;
 }
-function validateAllowedTableUsage(sqlQuery, allowedSchema, allowedTable) {
-    const normalizedAllowedSchema = normalizeSqlIdentifier(allowedSchema);
-    const normalizedAllowedTable = resolveBaseTableName(allowedTable);
-    if (!normalizedAllowedSchema || !normalizedAllowedTable) {
-        throw new Error('DB_ALLOWED_TABLE está vacío o inválido.');
+function validateAllowedTableUsage(sqlQuery, allowedSchema, allowedTables) {
+    const normalizedSchema = normalizeSqlIdentifier(allowedSchema);
+    if (!normalizedSchema) {
+        throw new Error('DB_ALLOWED_SCHEMA está vacío o inválido.');
     }
+    const allowedSet = new Set(allowedTables.map((t) => resolveBaseTableName(t)));
     const references = extractTableReferences(sqlQuery);
     if (!references.length) {
-        throw new Error('La consulta debe incluir FROM/JOIN sobre la tabla permitida con esquema explícito.');
+        throw new Error('La consulta debe incluir FROM/JOIN con esquema explícito.');
     }
-    const invalidReference = references.find((reference) => {
+    for (const reference of references) {
         const parsed = resolveSchemaAndTable(reference);
-        return parsed.schema !== normalizedAllowedSchema || parsed.table !== normalizedAllowedTable;
-    });
-    if (invalidReference) {
-        throw new Error(`La consulta solo puede usar [${normalizedAllowedSchema}].[${normalizedAllowedTable}]. Se detectó referencia no permitida: ${invalidReference}.`);
+        if (!parsed.schema) {
+            throw new Error(`Todas las referencias a tablas deben incluir esquema explícito. Sin esquema: ${reference}`);
+        }
+        if (parsed.schema !== normalizedSchema) {
+            throw new Error(`Solo se permite el esquema [${normalizedSchema}]. Detectado: [${parsed.schema}] en ${reference}.`);
+        }
+        if (allowedSet.size > 0 && !allowedSet.has(parsed.table)) {
+            throw new Error(`La tabla [${parsed.table}] no está en la lista de tablas permitidas (DB_ALLOWED_TABLES).`);
+        }
     }
 }
+function validateReadOnlySql(sqlQuery) {
+    const normalized = sqlQuery.trim();
+    const lower = normalized.toLowerCase();
+    if (!(lower.startsWith('select') || lower.startsWith('with'))) {
+        throw new Error('Solo se permiten consultas de lectura (SELECT / WITH).');
+    }
+    if (DANGEROUS_SQL_KEYWORDS.some((p) => p.test(lower))) {
+        throw new Error('La consulta generada incluye comandos no permitidos para solo lectura.');
+    }
+    if (lower.includes('--') || lower.includes('/*') || lower.includes('*/')) {
+        throw new Error('La consulta generada contiene comentarios SQL no permitidos.');
+    }
+    return normalized;
+}
+function isInvalidObjectNameError(message) {
+    return /invalid object name/i.test(message);
+}
+// ─── schema discovery ────────────────────────────────────────────────────────
 function buildSchemaHintFromRows(rows) {
     if (!rows.length)
         return '';
@@ -298,44 +356,47 @@ function buildSchemaHintFromRows(rows) {
             continue;
         const key = `${schema}.${table}`;
         if (!tableMap.has(key)) {
-            if (tableMap.size >= 30)
+            if (tableMap.size >= 50)
                 continue;
-            tableMap.set(key, {
-                schema,
-                table,
-                columns: [],
-            });
+            tableMap.set(key, { schema, table, columns: [] });
         }
-        const tableEntry = tableMap.get(key);
-        if (tableEntry && tableEntry.columns.length < 12 && !tableEntry.columns.includes(column)) {
-            tableEntry.columns.push(column);
+        const entry = tableMap.get(key);
+        if (entry && entry.columns.length < 20 && !entry.columns.includes(column)) {
+            entry.columns.push(column);
         }
     }
-    const lines = Array.from(tableMap.values()).map((entry) => `- [${entry.schema}].[${entry.table}](${entry.columns.join(', ')})`);
+    const lines = Array.from(tableMap.values()).map((e) => `- [${e.schema}].[${e.table}](${e.columns.join(', ')})`);
     if (!lines.length)
         return '';
-    return ['Tablas disponibles en la base de datos (usa solo estas):', ...lines].join('\n');
+    return ['Columnas descubiertas en la base de datos:', ...lines].join('\n');
 }
 async function discoverSchemaHint(config) {
     const dbPoolConfig = resolveDbPoolConfig(config);
     const pool = new mssql_1.default.ConnectionPool(dbPoolConfig);
     try {
         await pool.connect();
-        const result = await pool
-            .request()
-            .input('allowedSchema', mssql_1.default.NVarChar(256), config.dbAllowedSchema)
-            .input('allowedTable', mssql_1.default.NVarChar(256), config.dbAllowedTable)
-            .query(`
-      SELECT TOP (800)
-        TABLE_SCHEMA,
-        TABLE_NAME,
-        COLUMN_NAME,
-        DATA_TYPE
-      FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE LOWER(TABLE_SCHEMA) = LOWER(@allowedSchema)
-        AND LOWER(TABLE_NAME) = LOWER(@allowedTable)
-      ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION
-    `);
+        const request = pool.request().input('allowedSchema', mssql_1.default.NVarChar(256), config.dbAllowedSchema);
+        let query;
+        if (config.dbAllowedTables.length > 0) {
+            // Build trusted IN list from env-var values (not user input — safe to inline)
+            const tableList = config.dbAllowedTables.map((t) => `'${t.replaceAll("'", "''")}'`).join(', ');
+            query = `
+        SELECT TOP (1200) TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE LOWER(TABLE_SCHEMA) = LOWER(@allowedSchema)
+          AND LOWER(TABLE_NAME) IN (${tableList})
+        ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION
+      `;
+        }
+        else {
+            query = `
+        SELECT TOP (1200) TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE LOWER(TABLE_SCHEMA) = LOWER(@allowedSchema)
+        ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION
+      `;
+        }
+        const result = await request.query(query);
         return buildSchemaHintFromRows((result.recordset ?? []));
     }
     catch {
@@ -345,72 +406,43 @@ async function discoverSchemaHint(config) {
         await pool.close();
     }
 }
-function resolveModel(inputModel, defaultModel) {
-    if (typeof inputModel === 'string' && inputModel.trim())
-        return inputModel.trim();
-    return defaultModel;
-}
-function buildRequestBody(provider, messages, model) {
-    if (provider === 'gemini') {
-        return {
-            ...mapMessagesForGemini(messages),
-            ...(model ? { model } : {}),
-        };
+// ─── SQL execution ───────────────────────────────────────────────────────────
+async function executeSqlQuery(config, sqlQuery) {
+    const dbPoolConfig = resolveDbPoolConfig(config);
+    const target = resolveDbTarget(config);
+    const pool = new mssql_1.default.ConnectionPool(dbPoolConfig);
+    try {
+        await pool.connect();
+        const request = pool.request();
+        const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error(`La consulta SQL excedió el timeout de ${config.dbTimeoutMs} ms.`)), config.dbTimeoutMs);
+        });
+        const result = await Promise.race([request.query(sqlQuery), timeoutPromise]);
+        const records = (result.recordset ?? []);
+        return records.slice(0, config.dbMaxRows);
     }
-    return {
-        messages,
-        ...(model ? { model } : {}),
-    };
-}
-function buildHeaders(provider, authHeader, apiKey) {
-    const headers = {
-        'Content-Type': 'application/json',
-    };
-    if (!apiKey)
-        return headers;
-    if (provider === 'gemini') {
-        headers[authHeader] = apiKey;
-        return headers;
-    }
-    headers[authHeader] = apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`;
-    return headers;
-}
-async function requestUpstream(apiUrl, headers, body) {
-    return fetch(apiUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-    });
-}
-async function completeWithAI(config, messages, model) {
-    if (!config.apiUrl) {
-        throw new Error('Falta configurar AI_API_URL.');
-    }
-    const requestBody = buildRequestBody(config.provider, messages, model);
-    const headers = buildHeaders(config.provider, config.authHeader, config.apiKey);
-    const upstreamResponse = await requestUpstream(config.apiUrl, headers, requestBody);
-    if (!upstreamResponse.ok) {
-        const detail = await getUpstreamErrorDetail(upstreamResponse);
-        const hint = upstreamResponse.status === 429
-            ? 'Revisa cuotas/rate limits en Gemini y confirma billing habilitado.'
-            : undefined;
-        const reason = hint ? `${detail} ${hint}` : detail;
-        throw new Error(reason);
-    }
-    const payload = (await upstreamResponse.json());
-    return resolveAssistantText(payload);
-}
-function getLastUserQuestion(messages) {
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-        if (messages[index].role === 'user') {
-            return messages[index].content;
+    catch (error) {
+        const message = error instanceof Error ? error.message : 'Error desconocido al consultar la base de datos.';
+        if (/database was not found|insufficient permissions to connect to it|login failed/i.test(message)) {
+            throw new Error(`${message} (target: server=${target.server}, database=${target.database}). ` +
+                'Verifica que DB_DATABASE sea el nombre exacto de la base de datos y que el usuario tenga permisos de lectura.');
         }
+        throw new Error(`${message} (target: server=${target.server}, database=${target.database})`);
+    }
+    finally {
+        await pool.close();
+    }
+}
+// ─── SQL generation ──────────────────────────────────────────────────────────
+function getLastUserQuestion(messages) {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+        if (messages[i].role === 'user')
+            return messages[i].content;
     }
     throw new Error('No se encontró una pregunta del usuario para convertir a SQL.');
 }
 function unwrapCodeFence(value) {
-    const fencedRegex = /```(?:sql)?\s*([\s\S]*?)```/i;
-    const fenced = fencedRegex.exec(value);
+    const fenced = /```(?:sql)?\s*([\s\S]*?)```/i.exec(value);
     if (fenced?.[1])
         return fenced[1].trim();
     return value.trim();
@@ -422,235 +454,227 @@ function extractSqlCandidate(raw) {
         .map((line) => line.trim())
         .filter(Boolean)
         .join(' ');
-    if (!singleLine) {
+    if (!singleLine)
         throw new Error('La IA no devolvió SQL utilizable.');
-    }
     return singleLine.replace(/;\s*$/, '');
 }
-function validateReadOnlySql(sqlQuery) {
-    const normalized = sqlQuery.trim();
-    const lower = normalized.toLowerCase();
-    if (!(lower.startsWith('select') || lower.startsWith('with'))) {
-        throw new Error('Solo se permiten consultas de lectura (SELECT / WITH).');
+function buildAllowedTablesSection(schema, tables) {
+    if (tables.length > 0) {
+        return tables.map((t) => `- [${schema}].[${t}]`).join('\n');
     }
-    if (DANGEROUS_SQL_KEYWORDS.some((pattern) => pattern.test(lower))) {
-        throw new Error('La consulta generada incluye comandos no permitidos para solo lectura.');
-    }
-    if (lower.includes('--') || lower.includes('/*') || lower.includes('*/')) {
-        throw new Error('La consulta generada contiene comentarios SQL no permitidos.');
-    }
-    return normalized;
+    return `Cualquier tabla o vista del esquema [${schema}] con esquema explícito.`;
 }
-async function generateSqlFromQuestion(config, question, schemaHint, previousError) {
+async function generateSqlOrRoute(config, question, schemaHint, previousError) {
+    const schema = config.dbAllowedSchema;
+    const tablesSection = buildAllowedTablesSection(schema, config.dbAllowedTables);
     const systemPrompt = [
-        // === ROL Y ALCANCE ===
+        // ── ROL ──
         `Eres un asistente experto en SQL T-SQL para SQL Server.
-Tu única función es convertir preguntas de negocio en consultas SQL de solo lectura.`,
-        // === RESTRICCIONES DE SEGURIDAD (no negociables) ===
-        `RESTRICCIONES ABSOLUTAS:
-- Solo puedes generar sentencias SELECT o WITH ... SELECT.
-- Prohibido usar: INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, MERGE, EXEC.
+Tu función principal es convertir preguntas de negocio sobre datos financieros en consultas SQL de solo lectura.
+
+CASO ESPECIAL — RESPUESTA CONVERSACIONAL:
+Si la pregunta es un saludo, agradecimiento, pregunta sobre tus capacidades, o cualquier consulta que NO requiera datos de la base de datos, responde ÚNICAMENTE con la palabra:
+CONVERSATIONAL
+(sin explicaciones, sin SQL, solo esa palabra)`,
+        // ── RESTRICCIONES ──
+        `RESTRICCIONES ABSOLUTAS (cuando generes SQL):
+- Solo sentencias SELECT o WITH ... SELECT.
+- Prohibido: INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, MERGE, EXEC, EXECUTE.
 - Prohibido generar múltiples sentencias separadas por punto y coma.
-- Prohibido usar subconsultas o JOINs a tablas distintas a [${config.dbAllowedSchema}].[${config.dbAllowedTable}].
-- Si la pregunta no puede responderse con una consulta de lectura, responde: "No puedo generar esa consulta."`,
-        // === TABLA PERMITIDA ===
-        `TABLA ÚNICA PERMITIDA: [${config.dbAllowedSchema}].[${config.dbAllowedTable}]
-- Siempre califica con esquema. Ejemplo: FROM [${config.dbAllowedSchema}].[${config.dbAllowedTable}]
-- No uses ninguna otra tabla, vista o función de tabla.
-- Nunca uses referencias sin esquema.`,
-        // === FORMATO DE RESPUESTA ===
-        `FORMATO DE SALIDA:
+- Solo tablas/vistas del esquema [${schema}] con esquema explícito siempre.
+- Si la pregunta no puede responderse con datos disponibles, responde: CONVERSATIONAL`,
+        // ── TABLAS PERMITIDAS ──
+        `TABLAS Y VISTAS PERMITIDAS (esquema [${schema}]):
+${tablesSection}
+
+REGLAS DE USO:
+- Siempre califica con esquema. Ejemplo: FROM [${schema}].[nombre_tabla]
+- Puedes hacer JOINs entre tablas del mismo esquema.
+- Usa las vistas analíticas cuando estén disponibles (empiezan con vw_).
+- Nunca uses referencias sin esquema explícito.`,
+        // ── FORMATO ──
+        `FORMATO DE SALIDA (cuando generes SQL):
 - Devuelve ÚNICAMENTE el SQL, sin explicaciones, sin markdown, sin bloques de código.
-- No incluyas comentarios (--) ni texto fuera del SQL.`,
-        // === ESQUEMA DE LA TABLA ===
-        `ESQUEMA Y SIGNIFICADO DE COLUMNAS:
-Usa ÚNICAMENTE los nombres de columna listados aquí. Respeta mayúsculas/minúsculas exactas. No inventes columnas.
-
-| Columna            | Tipo    | Descripción                                                                 |
-|--------------------|---------|-----------------------------------------------------------------------------|
-| [ano]              | int     | Año del registro. Ej: WHERE [ano] = 2024                                    |
-| [mes]              | int     | Mes del registro (1-12). Ej: WHERE [mes] = 3                                |
-| [grupogerencial]   | varchar | Categoría gerencial de alto nivel. Ej: 'Gastos directos', 'Ingresos', 'Otros costos y gastos' |
-| [grupo]            | varchar | Grupo contable dentro de la categoría gerencial                             |
-| [Subgrupo]         | varchar | Subgrupo contable detallado. Ej: 'NOMINA', 'HONORARIOS', 'ARRIENDOS', 'DEPRECIACIONES Y AMORTIZACIONES', 'LICENCIAS SOFTWARE'. (La S de Subgrupo es MAYÚSCULA) |
-| [total_valor]      | float   | Valor ejecutado total del registro                                          |
-| [total_valormes]   | float   | Valor ejecutado mensual                                                     |
-| [total_presupuesto]| float   | Valor presupuestado                                                         |`,
-        // === REGLAS DE NEGOCIO ===
-        `REGLAS DE NEGOCIO:
-
-1. FILTROS POR SUBGRUPO
-   - Los valores de [Subgrupo] están en MAYÚSCULAS. Ej: WHERE [Subgrupo] = 'NOMINA'
-   - Para listar subgrupos disponibles: SELECT DISTINCT [Subgrupo] FROM [${config.dbAllowedSchema}].[${config.dbAllowedTable}]
-
-2. TOTALES Y AGRUPACIONES
-   - Usa SUM() para agregar valores cuando se pidan totales.
-   - Agrupa por [ano] y/o [mes] para análisis por periodo.
-   - Agrupa por [grupogerencial], [grupo] o [Subgrupo] para análisis por categoría.
-
-3. EJECUTADO VS PRESUPUESTO
-   - [total_valor] = valor ejecutado real.
-   - [total_presupuesto] = valor presupuestado.
-   - Para comparar: incluye ambas columnas con alias descriptivos. Ej: SUM([total_valor]) AS ejecutado, SUM([total_presupuesto]) AS presupuesto
-
-4. CÁLCULO DE EBITDA
-   EBITDA = Ingresos - Gastos directos - Otros costos y gastos + Depreciaciones y Amortizaciones
-
-   Patrón recomendado:
-   SELECT [grupogerencial], SUM([total_valor]) AS total
-   FROM [${config.dbAllowedSchema}].[${config.dbAllowedTable}]
-   WHERE [ano] = <año solicitado>
-   GROUP BY [grupogerencial]
-   -- (El cálculo de EBITDA se hace en la capa de aplicación sumando/restando los grupos)
-
-5. AMBIGÜEDAD
-   - Si el usuario menciona un Subgrupo con minúsculas (ej: "nómina"), conviértelo a mayúsculas en el filtro.
-   - Si el usuario no especifica año o mes, no filtres por periodo a menos que sea evidente en el contexto.`,
-        // === CONTEXTO DINÁMICO ===
+- No incluyas comentarios (--) ni texto fuera del SQL.
+- No uses punto y coma al final.`,
+        // ── REGLAS T-SQL ──
+        `BUENAS PRÁCTICAS T-SQL:
+- Usa TOP (N) para limitar resultados cuando no se pida un total.
+- Para filtrar por periodo usa el campo "periodo" (formato: '2025-01').
+- Para filtrar por año usa "anio" o "ejercicio" según la tabla.
+- Para comparar ejecutado vs presupuesto: une la tabla de hechos real con la de presupuesto por empresa_id, periodo y cuenta_id.
+- Usa SUM() para agregar valores monetarios; GROUP BY para desglosar por categoría o periodo.
+- Usa alias descriptivos en español para columnas calculadas.`,
+        // ── ESQUEMA DESCUBIERTO ──
         schemaHint
-            ? `CONTEXTO DE ESQUEMA ADICIONAL (descubierto en tiempo de ejecución):\n${schemaHint}`
+            ? `ESQUEMA DETALLADO DE COLUMNAS (descubierto automáticamente):\n${schemaHint}`
             : '',
+        // ── CONTEXTO ADICIONAL DEL NEGOCIO ──
+        config.dbSchemaHint
+            ? `CONTEXTO DE NEGOCIO (proporcionado por el administrador):\n${config.dbSchemaHint}`
+            : '',
+        // ── ERROR ANTERIOR ──
         previousError
-            ? `AVISO - ERROR EN CONSULTA ANTERIOR (evita repetir el mismo patrón):\n${previousError}`
+            ? `AVISO — ERROR EN CONSULTA ANTERIOR (evita repetir este patrón):\n${previousError}`
             : '',
-    ].filter(Boolean).join('\n\n');
-    const sqlDraft = await completeWithAI(config, [
+    ]
+        .filter(Boolean)
+        .join('\n\n');
+    const raw = await completeWithAI(config, [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: question },
     ], config.sqlModel);
-    const sqlCandidate = extractSqlCandidate(sqlDraft);
+    const trimmed = raw.trim();
+    // Detect conversational signal
+    if (trimmed.toUpperCase() === 'CONVERSATIONAL' || /^conversational$/i.test(trimmed)) {
+        return { type: 'conversational' };
+    }
+    const sqlCandidate = extractSqlCandidate(trimmed);
     const readOnlySql = validateReadOnlySql(sqlCandidate);
-    validateAllowedTableUsage(readOnlySql, config.dbAllowedSchema, config.dbAllowedTable);
-    return readOnlySql;
+    validateAllowedTableUsage(readOnlySql, config.dbAllowedSchema, config.dbAllowedTables);
+    return { type: 'sql', query: readOnlySql };
 }
-async function executeSqlQuery(config, sqlQuery) {
-    const dbPoolConfig = resolveDbPoolConfig(config);
-    const target = resolveDbTarget(config);
-    const pool = new mssql_1.default.ConnectionPool(dbPoolConfig);
-    try {
-        await pool.connect();
-        const request = pool.request();
-        const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => {
-                reject(new Error(`La consulta SQL excedió el timeout de ${config.dbTimeoutMs} ms.`));
-            }, config.dbTimeoutMs);
-        });
-        const result = await Promise.race([request.query(sqlQuery), timeoutPromise]);
-        const records = (result.recordset ?? []);
-        return records.slice(0, config.dbMaxRows);
-    }
-    catch (error) {
-        const message = error instanceof Error ? error.message : 'Error desconocido al consultar la base de datos.';
-        if (/database was not found|insufficient permissions to connect to it|login failed/i.test(message)) {
-            throw new Error(`${message} (target: server=${target.server}, database=${target.database}). ` +
-                'Verifica que DB_DATABASE sea el nombre exacto de la base de datos y que el usuario tenga permisos de acceso y lectura.');
-        }
-        throw new Error(`${message} (target: server=${target.server}, database=${target.database})`);
-    }
-    finally {
-        await pool.close();
-    }
+// ─── language & response helpers ─────────────────────────────────────────────
+function resolveLanguage(value) {
+    return value === 'en' ? 'en' : 'es';
+}
+function buildLanguageInstruction(language) {
+    return language === 'en'
+        ? 'Respond exclusively in English, clearly and concisely.'
+        : 'Responde exclusivamente en español de forma clara y concisa.';
+}
+function resolveModel(inputModel, defaultModel) {
+    if (typeof inputModel === 'string' && inputModel.trim())
+        return inputModel.trim();
+    return defaultModel;
 }
 function summarizeRows(rows) {
     if (!rows.length)
         return '[]';
     return JSON.stringify(rows);
 }
-function resolveLanguage(value) {
-    return value === 'en' ? 'en' : 'es';
+// ─── conversational prompt ───────────────────────────────────────────────────
+function buildConversationalSystemPrompt(config, language) {
+    const isEN = language === 'en';
+    const schema = config.dbAllowedSchema;
+    const availableReports = isEN
+        ? `- **Income Statement (P&L)**: revenues, cost of sales, gross profit, operating income by period.
+- **Balance Sheet**: current/non-current assets, current/non-current liabilities, equity.
+- **Cash Flow**: operating, investing, and financing activities.
+- **Budget vs Actual**: variance analysis (value and %) by account and cost center.
+- **Financial KPIs**: gross margin %, operating margin %, current ratio, working capital, leverage ratio.
+- **Accounts Receivable**: invoice aging, outstanding balances, overdue days by customer.
+- **Accounts Payable**: pending supplier invoices, overdue amounts.
+- **Sales**: by period, product, customer, sales rep — with revenue, costs, and gross margin.
+- **Inventory**: balances, movements (entries/exits), valuation by product.
+- **Financial Debt**: loans by entity, interest rate, outstanding balance, short/long term.
+- **Taxes**: caused, paid, and pending by type.
+- **Collections**: customer payment tracking linked to invoices.
+- **Supplier Payments**: payment tracking linked to supplier invoices.
+- **Bank Balances**: opening/closing balances and movements by bank account.`
+        : `- **Estado de Resultados (PyG)**: ingresos, costo de ventas, utilidad bruta y operativa por periodo.
+- **Balance General**: activos corrientes/no corrientes, pasivos, patrimonio.
+- **Flujo de Caja**: flujo operativo, de inversión y de financiamiento.
+- **Real vs Presupuesto**: análisis de variaciones (valor y %) por cuenta y centro de costo.
+- **KPIs Financieros**: margen bruto %, margen operativo %, liquidez corriente, capital de trabajo, endeudamiento.
+- **Cartera de Clientes**: antigüedad de cartera, saldos pendientes y días vencidos por cliente.
+- **Cuentas por Pagar**: facturas de proveedores pendientes y vencidas.
+- **Ventas**: por periodo, producto, cliente y vendedor — con ingresos, costos y margen bruto.
+- **Inventarios**: saldos, movimientos (entradas/salidas) y valoración por producto.
+- **Deuda Financiera**: créditos por entidad, tasa de interés, saldo de capital, corto y largo plazo.
+- **Impuestos**: causados, pagados y pendientes por tipo.
+- **Recaudos**: seguimiento de pagos recibidos de clientes vinculados a facturas.
+- **Pagos a Proveedores**: seguimiento de pagos realizados vinculados a facturas.
+- **Saldos Bancarios**: saldos iniciales, finales y movimientos por cuenta bancaria.`;
+    const instructions = isEN
+        ? `You are FIBOT, a financial analysis assistant connected to a SQL Server database (schema: [${schema}]).
+
+You can answer questions about financial data, generate reports, explain financial concepts, and guide users on what analyses are available.
+
+AVAILABLE REPORTS AND ANALYSES:
+${availableReports}
+
+HOW TO INTERACT:
+- For greetings and general questions: respond naturally and helpfully.
+- For "what can you do?" questions: list the available reports clearly.
+- For financial concept questions: explain them in simple terms with context.
+- For data questions: let the user know you will query the database — they just need to ask naturally.
+
+RESPONSE FORMAT:
+- Use valid HTML. No markdown, no code blocks.
+- Do NOT use heading tags (h1–h6). Use <strong> for emphasis.
+- For lists: use <ul><li> structure.
+- Keep responses concise and actionable.
+
+${buildLanguageInstruction(language)}`
+        : `Eres FIBOT, un asistente de análisis financiero conectado a una base de datos SQL Server (esquema: [${schema}]).
+
+Puedes responder preguntas sobre datos financieros, generar reportes, explicar conceptos financieros y orientar a los usuarios sobre qué análisis están disponibles.
+
+REPORTES Y ANÁLISIS DISPONIBLES:
+${availableReports}
+
+CÓMO INTERACTUAR:
+- Para saludos y preguntas generales: responde de forma natural y amigable.
+- Para "¿qué puedes hacer?": lista claramente los reportes disponibles.
+- Para preguntas sobre conceptos financieros: explícalos en términos simples con contexto práctico.
+- Para preguntas sobre datos: el usuario solo necesita preguntar en lenguaje natural y consultarás la base de datos automáticamente.
+
+FORMATO DE RESPUESTA:
+- Usa HTML válido. Sin markdown, sin bloques de código.
+- NO uses etiquetas de encabezado (h1–h6). Usa <strong> para énfasis.
+- Para listas: usa estructura <ul><li>.
+- Mantén las respuestas concisas y accionables.
+
+${buildLanguageInstruction(language)}`;
+    return instructions;
 }
-function buildLanguageInstruction(language) {
-    return language === 'en'
-        ? 'Respond exclusively in English, clearly and actionably.'
-        : 'Responde exclusivamente en español de forma clara y accionable.';
-}
+// ─── answer generation ───────────────────────────────────────────────────────
 function buildAnswerSystemPrompt(language) {
     const isEN = language === 'en';
     const roleBlock = isEN
-        ? `You are a financial data analyst. Answer ONLY based on the SQL query results provided. Do not use external knowledge or assumptions beyond what the data shows.
-If the data is insufficient to answer the question, say so clearly and specify what additional data would be needed.`
-        : `Eres un analista de datos financieros. Responde ÚNICAMENTE con base en los resultados de la consulta SQL entregada. No uses conocimiento externo ni hagas suposiciones más allá de lo que muestran los datos.
-Si los datos son insuficientes para responder la pregunta, dilo claramente e indica qué dato adicional se necesitaría.`;
-    const domainBlock = isEN
-        ? `DATA STRUCTURE CONTEXT:
-- [grupogerencial]: High-level management category. Known values: "Ingresos", "Gastos directos", "Otros costos y gastos".
-- [grupo]: Accounting group within the management category.
-- [Subgrupo]: Detailed accounting line item. Examples: NOMINA, HONORARIOS, ARRIENDOS, DEPRECIACIONES Y AMORTIZACIONES, LICENCIAS SOFTWARE.
-- [total_valor]: Actual/executed value.
-- [total_presupuesto]: Budgeted value.
-- [ano] / [mes]: Year and month of the record.`
-        : `CONTEXTO DE ESTRUCTURA DE DATOS:
-- [grupogerencial]: Categoría gerencial de alto nivel. Valores conocidos: "Ingresos", "Gastos directos", "Otros costos y gastos".
-- [grupo]: Grupo contable dentro de la categoría gerencial.
-- [Subgrupo]: Rubro contable detallado. Ejemplos: NOMINA, HONORARIOS, ARRIENDOS, DEPRECIACIONES Y AMORTIZACIONES, LICENCIAS SOFTWARE.
-- [total_valor]: Valor ejecutado real.
-- [total_presupuesto]: Valor presupuestado.
-- [ano] / [mes]: Año y mes del registro.`;
+        ? `You are FIBOT, a financial data analyst. Answer ONLY based on the SQL query results provided.
+Do not use external knowledge beyond what the data shows. If the data is insufficient, say so clearly.`
+        : `Eres FIBOT, un analista de datos financieros. Responde ÚNICAMENTE con base en los resultados de la consulta SQL entregada.
+No uses conocimiento externo más allá de lo que muestran los datos. Si los datos son insuficientes, dilo claramente.`;
     const ebitdaBlock = isEN
-        ? `EBITDA CALCULATION RULE (apply only when the question involves EBITDA):
-  EBITDA = Ingresos − Gastos directos − Otros costos y gastos + DEPRECIACIONES Y AMORTIZACIONES
-
-  Steps:
-  1. Sum all rows where [grupogerencial] = "Ingresos"
-  2. Subtract sum where [grupogerencial] = "Gastos directos"
-  3. Subtract sum where [grupogerencial] = "Otros costos y gastos"
-  4. Add back sum where [Subgrupo] = "DEPRECIACIONES Y AMORTIZACIONES"
-
+        ? `EBITDA CALCULATION (apply only when asked):
+  EBITDA = Revenues − Direct Costs − Other Costs & Expenses + Depreciation & Amortization
   - If any component is missing from the data, use 0 and flag it explicitly.
-  - Always present the calculation step by step.`
-        : `REGLA DE CÁLCULO EBITDA (aplica solo cuando la pregunta involucre EBITDA):
-  EBITDA = Ingresos − Gastos directos − Otros costos y gastos + DEPRECIACIONES Y AMORTIZACIONES
-
-  Pasos:
-  1. Suma filas donde [grupogerencial] = "Ingresos"
-  2. Resta suma donde [grupogerencial] = "Gastos directos"
-  3. Resta suma donde [grupogerencial] = "Otros costos y gastos"
-  4. Suma de vuelta donde [Subgrupo] = "DEPRECIACIONES Y AMORTIZACIONES"
-
+  - Always show the calculation step by step.`
+        : `CÁLCULO DE EBITDA (aplica solo cuando se pregunte):
+  EBITDA = Ingresos − Gastos directos − Otros costos y gastos + Depreciaciones y Amortizaciones
   - Si falta algún componente en los datos, usa 0 e indícalo explícitamente.
   - Presenta siempre el cálculo paso a paso.`;
     const formatBlock = isEN
-        ? `OUTPUT FORMAT RULES (always apply):
-- Respond exclusively in valid HTML. No markdown, no code blocks (\`\`\`), no Mermaid.
-- Do NOT use heading tags (h1–h6). Use <strong> for titles or key concepts instead.
-- Monetary values: always format with thousand separators. Ej: 1,250,000.
-- For calculations or comparisons → use an HTML table with columns: <th>Component</th><th>Value</th>
-- For lists → use <ul><li> structure.
-- For single key values → use <p><strong>Label:</strong> value</p>.`
-        : `REGLAS DE FORMATO DE SALIDA (aplica siempre):
-- Responde exclusivamente en HTML válido. Sin markdown, sin bloques de código (\`\`\`), sin Mermaid.
-- NO uses etiquetas de encabezado (h1–h6). Usa <strong> para títulos o conceptos clave.
-- Valores monetarios: formatea siempre con separadores de miles. Ej: 1.250.000.
-- Para cálculos o comparaciones → usa tabla HTML con columnas: <th>Concepto</th><th>Valor</th>
-- Para listas → usa estructura <ul><li>.
-- Para valores clave únicos → usa <p><strong>Etiqueta:</strong> valor</p>.`;
+        ? `OUTPUT FORMAT (always apply):
+- Respond exclusively in valid HTML. No markdown, no code blocks, no Mermaid.
+- Do NOT use heading tags (h1–h6). Use <strong> for titles.
+- Monetary values: format with thousand separators. E.g.: 1,250,000.
+- For calculations/comparisons → HTML table: <th>Component</th><th>Value</th>
+- For lists → <ul><li> structure.
+- For single key values → <p><strong>Label:</strong> value</p>.`
+        : `FORMATO DE SALIDA (aplica siempre):
+- Responde exclusivamente en HTML válido. Sin markdown, sin bloques de código, sin Mermaid.
+- NO uses etiquetas de encabezado (h1–h6). Usa <strong> para títulos.
+- Valores monetarios: formatea con separadores de miles. Ej: 1.250.000.
+- Para cálculos/comparaciones → tabla HTML: <th>Concepto</th><th>Valor</th>
+- Para listas → estructura <ul><li>.
+- Para valores clave únicos → <p><strong>Etiqueta:</strong> valor</p>.`;
     const chartBlock = isEN
-        ? `CHART RULES (only when the user explicitly requests a chart):
+        ? `CHART RULES (only when explicitly requested by the user):
 - Use QuickChart (quickchart.io) only. Allowed types: bar, pie, line.
 - Include exactly ONE <img> tag with src from quickchart.io.
 - Style: style="width:80%; max-width:500px;"
-- Always include the datalabels plugin to show values above each bar/segment.
-- URL-encode the chart config. Do not use backticks or markdown.
-
-Example:
-<img src="https://quickchart.io/chart?c={type:'bar',data:{labels:['Executed','Budgeted'],datasets:[{label:'Value',data:[63000,85000]}]},options:{plugins:{datalabels:{anchor:'end',align:'top',font:{weight:'bold'}}}}}" style="width:80%; max-width:500px;">`
+- Always include the datalabels plugin to show values on each bar/segment.
+- URL-encode the config. No backticks or markdown.`
         : `REGLAS DE GRÁFICOS (solo cuando el usuario lo solicite explícitamente):
-- Usa únicamente QuickChart (quickchart.io). Tipos permitidos: bar, pie, line.
+- Usa únicamente QuickChart (quickchart.io). Tipos: bar, pie, line.
 - Incluye exactamente UNA etiqueta <img> con src de quickchart.io.
 - Estilo: style="width:80%; max-width:500px;"
-- Siempre incluye el plugin datalabels para mostrar valores encima de cada barra/segmento.
-- Codifica la URL del config del gráfico. No uses backticks ni markdown.
-
-Ejemplo:
-<img src="https://quickchart.io/chart?c={type:'bar',data:{labels:['Ejecutado','Presupuestado'],datasets:[{label:'Valor',data:[63000,85000]}]},options:{plugins:{datalabels:{anchor:'end',align:'top',font:{weight:'bold'}}}}}" style="width:80%; max-width:500px;">`;
-    return [
-        roleBlock,
-        domainBlock,
-        ebitdaBlock,
-        formatBlock,
-        chartBlock,
-        buildLanguageInstruction(language),
-    ]
+- Siempre incluye el plugin datalabels para mostrar valores en cada barra/segmento.
+- Codifica la URL del config. Sin backticks ni markdown.`;
+    return [roleBlock, ebitdaBlock, formatBlock, chartBlock, buildLanguageInstruction(language)]
         .filter(Boolean)
         .join('\n\n---\n\n');
 }
@@ -659,81 +683,74 @@ function buildAnswerUserPrompt(question, sqlQuery, rowsSummary) {
         `USER QUESTION: ${question}`,
         `EXECUTED SQL:\n${sqlQuery}`,
         `QUERY RESULTS (JSON):\n${rowsSummary}`,
-        'Generate the final response to the user following all system rules.',
+        'Generate the final response following all system rules.',
     ].join('\n\n');
 }
 async function answerWithData(config, question, sqlQuery, rows, language) {
-    const rowsSummary = summarizeRows(rows);
-    const systemPrompt = buildAnswerSystemPrompt(language);
-    const userPrompt = buildAnswerUserPrompt(question, sqlQuery, rowsSummary);
     return completeWithAI(config, [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
+        { role: 'system', content: buildAnswerSystemPrompt(language) },
+        { role: 'user', content: buildAnswerUserPrompt(question, sqlQuery, summarizeRows(rows)) },
     ], config.answerModel);
 }
+// ─── flow handlers ───────────────────────────────────────────────────────────
 function injectLanguageHint(messages, language) {
-    const hint = buildLanguageInstruction(language);
-    return [{ role: 'system', content: hint }, ...messages];
+    return [{ role: 'system', content: buildLanguageInstruction(language) }, ...messages];
 }
 async function handleDirectChat(config, parsed, messages, language) {
     const model = resolveModel(parsed.model, config.defaultModel);
-    const messagesWithLanguage = injectLanguageHint(messages, language);
-    const message = await completeWithAI(config, messagesWithLanguage, model);
+    const message = await completeWithAI(config, injectLanguageHint(messages, language), model);
+    return { message };
+}
+async function handleConversationalResponse(config, messages, language) {
+    const systemPrompt = buildConversationalSystemPrompt(config, language);
+    const message = await completeWithAI(config, [{ role: 'system', content: systemPrompt }, ...messages], config.answerModel || config.defaultModel);
     return { message };
 }
 async function handleDbAgentFlow(config, messages, language) {
     const question = getLastUserQuestion(messages);
     const discoveredSchemaHint = await discoverSchemaHint(config);
-    const baseSchemaHint = [config.dbSchemaHint, discoveredSchemaHint].filter(Boolean).join('\n\n').trim();
-    let sqlQuery = await generateSqlFromQuestion(config, question, baseSchemaHint);
+    const baseSchemaHint = [config.dbSchemaHint, discoveredSchemaHint]
+        .filter(Boolean)
+        .join('\n\n')
+        .trim();
+    // Route: conversational vs SQL
+    const route = await generateSqlOrRoute(config, question, baseSchemaHint);
+    if (route.type === 'conversational') {
+        return handleConversationalResponse(config, messages, language);
+    }
+    let sqlQuery = route.query;
     let rows = [];
     try {
         rows = await executeSqlQuery(config, sqlQuery);
     }
     catch (error) {
         const firstError = error instanceof Error ? error.message : 'Error desconocido al ejecutar SQL.';
-        if (!isInvalidObjectNameError(firstError)) {
+        if (!isInvalidObjectNameError(firstError))
             throw error;
+        // Retry once with fresh schema hint after invalid-object-name error
+        const retryHint = await discoverSchemaHint(config);
+        const mergedHint = [config.dbSchemaHint, retryHint].filter(Boolean).join('\n\n').trim();
+        const retryRoute = await generateSqlOrRoute(config, question, mergedHint, firstError);
+        if (retryRoute.type === 'conversational') {
+            return handleConversationalResponse(config, messages, language);
         }
-        const retrySchemaHint = await discoverSchemaHint(config);
-        const mergedRetryHint = [config.dbSchemaHint, retrySchemaHint].filter(Boolean).join('\n\n').trim();
-        sqlQuery = await generateSqlFromQuestion(config, question, mergedRetryHint, firstError);
+        sqlQuery = retryRoute.query;
         rows = await executeSqlQuery(config, sqlQuery);
     }
     const message = await answerWithData(config, question, sqlQuery, rows, language);
     return {
         message,
-        meta: {
-            sql: sqlQuery,
-            rows: rows.length,
-            source: 'sql-db',
-        },
+        meta: { sql: sqlQuery, rows: rows.length, source: 'sql-db' },
     };
 }
-async function getUpstreamErrorDetail(response) {
-    try {
-        const payload = (await response.json());
-        const message = payload.error?.message?.trim();
-        const status = payload.error?.status?.trim();
-        if (message && status)
-            return `${status}: ${message}`;
-        if (message)
-            return message;
-    }
-    catch {
-        // Fallback to generic status below.
-    }
-    return `El proveedor IA respondió con estado ${response.status}.`;
-}
+// ─── Lambda handler ──────────────────────────────────────────────────────────
 async function handler(event) {
     const allowedOrigin = process.env.ALLOWED_ORIGIN?.trim() || '*';
     const method = event.httpMethod ?? 'POST';
-    if (method === 'OPTIONS') {
+    if (method === 'OPTIONS')
         return jsonResponse(204, {}, allowedOrigin);
-    }
-    if (method !== 'POST') {
+    if (method !== 'POST')
         return jsonResponse(405, { error: 'Método no permitido.' }, allowedOrigin);
-    }
     const config = getConfig();
     if (!config.apiUrl) {
         return jsonResponse(500, { error: 'Falta configurar AI_API_URL.' }, allowedOrigin);
@@ -744,11 +761,9 @@ async function handler(event) {
         const language = resolveLanguage(parsed.language);
         const useDbFlow = Boolean(config.dbConnectionString || hasSqlAuthConfig(config) || hasServicePrincipalConfig(config));
         if (!useDbFlow) {
-            const directResult = await handleDirectChat(config, parsed, messages, language);
-            return jsonResponse(200, directResult, allowedOrigin);
+            return jsonResponse(200, await handleDirectChat(config, parsed, messages, language), allowedOrigin);
         }
-        const dbResult = await handleDbAgentFlow(config, messages, language);
-        return jsonResponse(200, dbResult, allowedOrigin);
+        return jsonResponse(200, await handleDbAgentFlow(config, messages, language), allowedOrigin);
     }
     catch (error) {
         const safeMessage = error instanceof Error ? error.message : 'Error inesperado del proxy.';
