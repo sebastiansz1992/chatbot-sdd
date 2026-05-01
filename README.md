@@ -1,352 +1,442 @@
-# FiBot Frontend
+# FiBot — Asistente Financiero
 
-Interfaz de FiBot (asistente financiero) construida con React, TypeScript, Tailwind CSS y Vite.
-
-El proyecto está enfocado en una experiencia de chat financiera moderna, con selección de modelos de IA, estados de sesión/seguridad, soporte de tema claro/oscuro y pruebas automatizadas unitarias + E2E.
+Interfaz de FiBot construida con React, TypeScript, Tailwind CSS y Vite, acompañada de un proxy de backend desplegable en **Azure Functions** o **AWS Lambda** que conecta con **Azure SQL Server** para responder preguntas financieras con datos reales.
 
 ## Tabla de contenido
 
-- [Resumen](#resumen)
+- [Arquitectura general](#arquitectura-general)
 - [Stack técnico](#stack-técnico)
 - [Requisitos](#requisitos)
 - [Inicio rápido](#inicio-rápido)
 - [Scripts disponibles](#scripts-disponibles)
-- [Arquitectura del proyecto](#arquitectura-del-proyecto)
-- [Flujo funcional actual](#flujo-funcional-actual)
-- [Integración con IA (TypeScript)](#integración-con-ia-typescript)
-- [Renderizado de mensajes del asistente](#renderizado-de-mensajes-del-asistente)
-- [Indicador de pensamiento del asistente](#indicador-de-pensamiento-del-asistente)
-- [Backend proxy y Data Fabric](#backend-proxy-y-data-fabric)
+- [Frontend](#frontend)
+- [Backend Proxy](#backend-proxy)
+- [Variables de entorno del frontend](#variables-de-entorno-del-frontend)
 - [Temas (Light/Dark)](#temas-lightdark)
-- [Iconografía de FiBot y agentes](#iconografía-de-fibot-y-agentes)
+- [Renderizado de mensajes](#renderizado-de-mensajes)
 - [Calidad y pruebas](#calidad-y-pruebas)
 - [Buenas prácticas para contribuir](#buenas-prácticas-para-contribuir)
 - [Troubleshooting](#troubleshooting)
 
-## Resumen
+---
 
-FiBot Frontend ofrece:
+## Arquitectura general
 
-- **Chat financiero interactivo** con timeline de mensajes y envío de prompts.
-- **Selector de modelos de IA** con estado activo.
-- **Indicadores de seguridad/sesión** en la barra superior.
-- **Tema claro/oscuro manual** con persistencia en `localStorage`.
-- **UI en español** en textos principales y etiquetas de accesibilidad.
-- **Renderizado enriquecido** de respuestas del asistente (HTML, Markdown y gráficos QuickChart).
-- **Indicador de pensamiento** animado mientras el asistente genera una respuesta.
-- **Integración con Data Fabric** mediante flujo agente SQL en el backend proxy.
-- **Pruebas automatizadas** para validar comportamiento y regresiones.
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              USUARIO (Navegador)                        │
+│                                                                         │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │                    FIBOT FRONTEND (React + Vite)                │   │
+│   │                                                                 │   │
+│   │  ┌──────────┐  ┌──────────────┐  ┌───────────┐  ┌──────────┐  │   │
+│   │  │ Sidebar  │  │  ChatTimeline │  │  TopBar   │  │ Composer │  │   │
+│   │  │ (models) │  │  (messages)  │  │ (session) │  │ (input)  │  │   │
+│   │  └──────────┘  └──────────────┘  └───────────┘  └──────────┘  │   │
+│   │                          │                                      │   │
+│   │                   src/services/ai.ts                            │   │
+│   │                  HTTP POST /chat (JSON)                         │   │
+│   └──────────────────────────┼──────────────────────────────────────┘   │
+└──────────────────────────────┼──────────────────────────────────────────┘
+                               │
+              ┌────────────────┴──────────────────┐
+              │                                   │
+              ▼                                   ▼
+  ┌───────────────────────┐          ┌────────────────────────┐
+  │  Azure Functions v4   │    OR    │     AWS Lambda         │
+  │  (azure-function.zip) │          │     (lambda.zip)       │
+  └───────────┬───────────┘          └──────────┬─────────────┘
+              │                                 │
+              └────────────────┬────────────────┘
+                               │
+                     processRequest() — lógica compartida
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                │
+              ▼                ▼                ▼
+    ┌──────────────┐  ┌────────────────┐  ┌──────────────┐
+    │  AI Provider │  │  Azure SQL     │  │  AI Provider │
+    │  (SQL Model) │  │  Server        │  │(Answer Model)│
+    └──────────────┘  └────────────────┘  └──────────────┘
+```
+
+### Flujo de una pregunta financiera
+
+```
+Usuario: "¿Cuáles fueron los ingresos de enero 2025?"
+    │
+    ▼
+[1] Frontend → POST /chat  (historial de mensajes)
+    │
+    ▼
+[2] Proxy: clasifica intención → DATA o CONVERSATIONAL
+    │
+    ├── CONVERSATIONAL → AI genera respuesta directa (sin BD)
+    │
+    └── DATA
+         │
+         ▼
+        [3] Descubrir esquema  (INFORMATION_SCHEMA.COLUMNS)
+         │
+         ▼
+        [4] Generar T-SQL  (AI sqlModel + esquema descubierto)
+         │
+         ▼
+        [5] Validar SQL  (SELECT-only, whitelist esquema/tablas, sin DML)
+         │
+         ▼
+        [6] Ejecutar en Azure SQL Server
+         │
+         ▼
+        [7] Generar respuesta HTML  (AI answerModel + datos JSON)
+         │
+         ▼
+        [8] Frontend renderiza HTML enriquecido con DOMPurify + marked
+```
+
+---
 
 ## Stack técnico
 
-- **React 19**
-- **TypeScript 5**
-- **Vite 8**
-- **Tailwind CSS 3**
-- **marked** (renderizado Markdown)
-- **DOMPurify** (sanitización HTML)
-- **Vitest + Testing Library** (unitarias)
-- **Playwright** (end-to-end)
-- **ESLint + Prettier**
+### Frontend
+
+| Tecnología | Versión | Rol |
+|---|---|---|
+| React | 19 | UI declarativa |
+| TypeScript | 5 | Tipado estático |
+| Vite | 8 | Bundler y dev server |
+| Tailwind CSS | 3 | Estilos utilitarios |
+| marked | latest | Renderizado Markdown |
+| DOMPurify | 3 | Sanitización XSS |
+| Vitest + Testing Library | latest | Pruebas unitarias |
+| Playwright | latest | Pruebas E2E |
+
+### Backend Proxy
+
+| Tecnología | Versión | Rol |
+|---|---|---|
+| TypeScript / Node.js | 20 | Runtime |
+| mssql | 12 | Conexión Azure SQL Server |
+| @azure/functions | 4 | Adaptador Azure Functions |
+| Azure Functions v4 | — | Plataforma serverless (opción A) |
+| AWS Lambda | — | Plataforma serverless (opción B) |
+
+---
 
 ## Requisitos
 
-- **Node.js** 20+ recomendado
-- **npm** 10+ recomendado
+- **Node.js** 20+
+- **npm** 10+
+- Para el proxy: cuenta en Azure o AWS con permisos de despliegue
+
+---
 
 ## Inicio rápido
 
-1. Instalar dependencias:
+```bash
+# 1. Instalar dependencias
+npm install
 
-	 ```bash
-	 npm install
-	 ```
+# 2. Configurar variables del frontend
+cp .env.example .env
+# Editar .env con VITE_AI_API_URL apuntando al endpoint del proxy
 
-2. Levantar ambiente local:
+# 3. Levantar frontend local
+npm run dev
+# → http://localhost:5173
+```
 
-	 ```bash
-	 npm run dev
-	 ```
+Para levantar el proxy localmente ver la sección [Backend Proxy](#backend-proxy).
 
-3. Abrir en navegador:
-
-	 - Vite mostrará una URL local (normalmente `http://localhost:5173`).
+---
 
 ## Scripts disponibles
 
-- Desarrollo:
+| Script | Descripción |
+|---|---|
+| `npm run dev` | Servidor de desarrollo Vite |
+| `npm run build` | Build de producción (TypeScript + Vite) |
+| `npm run preview` | Preview del build de producción |
+| `npm run lint` | ESLint sobre todo el proyecto |
+| `npm run format` | Prettier sobre todo el proyecto |
+| `npm run test` | Pruebas unitarias (Vitest) |
+| `npm run test:watch` | Pruebas unitarias en modo watch |
+| `npm run test:e2e` | Pruebas E2E (Playwright) |
+| `npm run build:proxy` | Compila TypeScript del proxy → `backend-proxy/dist/index.js` |
+| `npm run package:proxy` | Empaqueta para AWS Lambda → `backend-proxy/lambda.zip` |
+| `npm run package:azure` | Empaqueta para Azure Functions → `backend-proxy/azure-function.zip` |
 
-	```bash
-	npm run dev
-	```
+---
 
-- Build de producción:
+## Frontend
 
-	```bash
-	npm run build
-	```
+### Estructura de directorios
 
-- Preview del build:
+```
+src/
+├── app/                   → App.tsx (composición raíz)
+├── components/
+│   ├── chat/              → ChatTimeline, burbujas, composer, disclaimer
+│   ├── layout/            → Shell, Sidebar, TopBar, estados de sesión
+│   └── models/            → Selector de modelos e ítems
+├── data/                  → Contenido estático y mock data
+├── services/              → Cliente HTTP (src/services/ai.ts)
+├── styles/                → Estilos globales
+└── types/                 → Tipos de dominio UI
+tests/
+├── unit/                  → Pruebas unitarias (Vitest)
+└── e2e/                   → Pruebas end-to-end (Playwright)
+```
 
-	```bash
-	npm run preview
-	```
+### Flujo de interacción
 
-- Lint:
+1. El usuario escribe un mensaje en el composer.
+2. El mensaje se agrega al timeline y aparece el indicador de pensamiento animado.
+3. `src/services/ai.ts` envía el historial completo al proxy via HTTP POST.
+4. La respuesta llega como HTML enriquecido y se renderiza con `marked` + `DOMPurify`.
+5. El indicador de pensamiento desaparece y el mensaje del asistente queda en el timeline.
 
-	```bash
-	npm run lint
-	```
+### Indicador de pensamiento
 
-- Formato:
+Mientras el asistente genera su respuesta, el timeline muestra una burbuja **"Asistente está pensando"** con tres puntos animados (bounce). Es accesible (`aria-live="polite"`) y desaparece automáticamente al recibir respuesta.
 
-	```bash
-	npm run format
-	```
+### Renderizado enriquecido
 
-- Tests unitarios:
+- **Markdown**: tablas, listas, negritas, código.
+- **HTML directo**: respuestas HTML del proxy se renderizan tal cual.
+- **Sanitización XSS**: `DOMPurify` filtra todo contenido antes de insertarlo en el DOM.
+- **Gráficos QuickChart**: bloques ` ```mermaid ` con datasets se convierten en imágenes `<img>` de `quickchart.io`.
 
-	```bash
-	npm run test
-	```
+---
 
-- Tests E2E:
+## Backend Proxy
 
-	```bash
-	npm run test:e2e
-	```
+El proxy vive en `backend-proxy/` y comparte el mismo código fuente compilado para ambas plataformas. Consulta la guía completa en [backend-proxy/README.md](backend-proxy/README.md).
 
-- Compilar backend proxy:
+### Plataformas soportadas
 
-	```bash
-	npm run build:proxy
-	```
+| Plataforma | Paquete | Activación |
+|---|---|---|
+| **Azure Functions v4** | `azure-function.zip` | `@azure/functions` presente en `node_modules` |
+| **AWS Lambda** | `lambda.zip` | fallback cuando `@azure/functions` no está |
 
-- Empaquetar backend proxy (genera `lambda.zip`):
+### Modos de operación
 
-	```bash
-	npm run package:proxy
-	```
+**Sin base de datos configurada** — el proxy actúa como relay seguro: protege la API key del proveedor IA sin exponer credenciales al navegador.
 
-## Arquitectura del proyecto
+**Con Azure SQL Server** — flujo agente completo de 5 pasos:
+1. Descubrimiento de esquema (`INFORMATION_SCHEMA.COLUMNS`)
+2. Clasificación de intención (DATA vs CONVERSATIONAL)
+3. Generación de T-SQL seguro (AI sqlModel)
+4. Validación y ejecución en Azure SQL
+5. Generación de respuesta HTML (AI answerModel)
 
-Estructura principal:
+### Compilar y desplegar
 
-- `src/app` → composición de la aplicación (`App.tsx`).
-- `src/components/chat` → timeline, burbujas, disclaimer y composer.
-- `src/components/layout` → shell, sidebar, top bar y estados de sesión.
-- `src/components/models` → selector de modelos e ítems.
-- `src/data` → contenido estático y mock data.
-- `src/services` → cliente HTTP para comunicación con el proveedor de IA.
-- `src/styles` → estilos globales.
-- `src/types` → tipos de dominio de UI.
-- `backend-proxy` → proxy AWS Lambda con soporte de Data Fabric.
-- `tests/unit` → pruebas unitarias de comportamiento.
-- `tests/e2e` → pruebas end-to-end con Playwright.
+```bash
+# 1. Compilar TypeScript
+npm run build:proxy
 
-## Flujo funcional actual
+# 2a. Empaquetar para Azure Functions
+npm run package:azure
+# → backend-proxy/azure-function.zip
 
-1. El usuario abre la app y visualiza:
-	 - Sidebar con marca FiBot.
-	 - Modelos de IA disponibles.
-	 - Barra superior con estado de seguridad/sesión.
-2. El usuario escribe un mensaje en el composer.
-3. La app valida que el input no esté vacío.
-4. El mensaje se agrega al timeline y se muestra el indicador de pensamiento animado.
-5. Se llama al backend proxy, que puede responder directamente o ejecutar el flujo Data Fabric (SQL → resultados → respuesta).
-6. La respuesta del asistente se renderiza con HTML/Markdown enriquecido y gráficos QuickChart si corresponde.
-7. Se mantiene visible el disclaimer financiero.
+# 2b. Empaquetar para AWS Lambda
+npm run package:proxy
+# → backend-proxy/lambda.zip
 
-## Integración con IA (TypeScript)
+# 3a. Desplegar en Azure (requiere Azure CLI)
+az functionapp deployment source config-zip `
+  --resource-group <resource-group> `
+  --name <function-app-name> `
+  --src backend-proxy/azure-function.zip
 
-El chat ya está integrado con un cliente TypeScript para consultar un proveedor de IA vía HTTP.
+# 3b. Desplegar en AWS Lambda
+aws lambda update-function-code \
+  --function-name fibot-ai-proxy \
+  --zip-file fileb://backend-proxy/lambda.zip
+```
 
-### Cómo configurarlo
+### Modos de conexión a Azure SQL
 
-1. Crea tu archivo local de entorno:
+El proxy detecta automáticamente el modo según las variables presentes:
 
-	```bash
-	cp .env.example .env
-	```
+| Modo | Variables requeridas |
+|---|---|
+| Connection String | `DB_CONNECTION_STRING` |
+| SQL Auth | `DB_SERVER` + `DB_DATABASE` + `DB_USER` + `DB_PASSWORD` |
+| Service Principal | `DB_SERVER` + `DB_DATABASE` + `AZURE_TENANT_ID` + `AZURE_CLIENT_ID` + `AZURE_CLIENT_SECRET` |
 
-2. Define variables en `.env`:
+---
 
-	- `VITE_AI_API_URL`: URL del endpoint de chat/completions.
-	- `VITE_AI_API_KEY`: token o API key.
-	- `VITE_AI_MODEL`: modelo a utilizar (opcional).
-	- `VITE_AI_AUTH_HEADER`: header de auth (opcional, por defecto `Authorization`).
+## Variables de entorno del frontend
 
-### Flujo al enviar mensaje
+Define en tu archivo `.env` (nunca subir al repositorio):
 
-- Se agrega inmediatamente el mensaje del usuario en la conversación.
-- Se muestra el indicador de pensamiento animado mientras se espera respuesta.
-- Se envía el historial al endpoint configurado.
-- La respuesta del asistente se renderiza con HTML/Markdown enriquecido.
-- Si falla la llamada, se muestra un mensaje de error del asistente.
+| Variable | Descripción |
+|---|---|
+| `VITE_AI_API_URL` | URL del endpoint del proxy (`/api/chat` en Azure o API Gateway en Lambda) |
+| `VITE_AI_API_KEY` | API key (solo si el frontend llama directo al proveedor IA sin proxy) |
+| `VITE_AI_MODEL` | Modelo por defecto (opcional) |
+| `VITE_AI_AUTH_HEADER` | Header de autenticación (opcional, default `Authorization`) |
 
-### Nota sobre Copilot
+Con el proxy desplegado, `VITE_AI_API_URL` apunta al endpoint del proxy y las credenciales sensibles viven en las variables de entorno del servidor, no en el frontend.
 
-Si quieres usar un servicio asociado a tu suscripción de Copilot, debes exponer o usar un endpoint HTTP compatible con este frontend y mapearlo en `VITE_AI_API_URL`.
-
-### Backend proxy recomendado
-
-En este repositorio tienes un proxy listo para AWS Lambda en `backend-proxy`.
-
-- Guía completa: `backend-proxy/README.md`.
-- El frontend puede apuntar al endpoint de API Gateway generado por ese proxy.
-
-## Renderizado de mensajes del asistente
-
-Los mensajes del asistente se renderizan con contenido enriquecido mediante:
-
-- **Markdown** (`marked`) con soporte de tablas, listas, negritas, código y más.
-- **HTML directo**: si la respuesta ya contiene etiquetas HTML, se renderiza tal cual.
-- **Sanitización** con `DOMPurify` para prevenir ataques XSS antes de insertar en el DOM.
-- **Gráficos QuickChart**: los bloques `mermaid` del tipo gráfico de barras son automáticamente convertidos a imágenes `<img>` generadas por QuickChart (`quickchart.io`).
-
-### Conversión de gráficos Mermaid a QuickChart
-
-Si la IA responde con un bloque de código ` ```mermaid ` conteniendo datos con datasets en formato `"Label": [valores]`, el frontend lo transforma automáticamente en un gráfico de barras renderizado como imagen.
-
-Esto permite mostrar visualizaciones financieras sin depender de librerías de gráficos del lado cliente.
-
-## Indicador de pensamiento del asistente
-
-Mientras el asistente genera su respuesta, el `ChatTimeline` muestra una burbuja con el texto **"Asistente está pensando"** acompañada de tres puntos animados (bounce). Este indicador:
-
-- Es accesible (`aria-live="polite"`, `aria-label` descriptivo).
-- Desaparece automáticamente cuando llega la respuesta.
-- Tiene soporte para tema claro y oscuro.
-
-## Backend proxy y Data Fabric
-
-El proxy Lambda en `backend-proxy/` soporta dos modos de operación:
-
-### Modo chat directo
-
-Sin variables de Data Fabric configuradas, el proxy actúa como un relay seguro entre el frontend y el proveedor de IA, protegiendo la API key.
-
-### Modo agente Data Fabric
-
-Cuando se configura `DATA_FABRIC_CONNECTION_STRING` o las variables de App Registration, el proxy ejecuta un flujo agente completo:
-
-1. **Pregunta → SQL**: la IA convierte la pregunta del usuario a T-SQL para Microsoft Fabric Warehouse.
-2. **Validación SQL**: se aplican validaciones de solo lectura (SELECT/WITH), palabras clave peligrosas, esquema y tabla permitida.
-3. **Descubrimiento de esquema**: consulta automática a `INFORMATION_SCHEMA.COLUMNS` para enriquecer el contexto de generación SQL.
-4. **Ejecución SQL**: se ejecuta la consulta en Fabric con timeout configurable.
-5. **Retry automático**: si la primera ejecución falla por tabla inválida, el proxy regenera el SQL con el esquema descubierto.
-6. **Resultados → Respuesta**: la IA genera la respuesta final en HTML enriquecido con base en los datos obtenidos.
-
-### Variables de entorno del proxy
-
-- `AI_API_URL` (requerido): endpoint del proveedor IA.
-- `AI_API_KEY` (opcional/recomendado): token o API key.
-- `AI_MODEL` (opcional): modelo por defecto.
-- `AI_AUTH_HEADER` (opcional): por defecto `Authorization`.
-- `AI_PROVIDER` (opcional): `openai-compatible` (default) o `gemini`.
-- `AI_SQL_MODEL` (opcional): modelo para la etapa pregunta→SQL.
-- `AI_ANSWER_MODEL` (opcional): modelo para la etapa resultados→respuesta final.
-- `ALLOWED_ORIGIN` (opcional): origen permitido para CORS.
-- `DATA_FABRIC_CONNECTION_STRING` (opcional): cadena de conexión SQL de Microsoft Fabric.
-- `DATA_FABRIC_SERVER` (opcional): host de Fabric Warehouse.
-- `DATA_FABRIC_DATABASE` (opcional): nombre de base de datos/warehouse.
-- `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` (opcional): App Registration para autenticación sin connection string.
-- `DATA_FABRIC_ALLOWED_SCHEMA` (opcional): esquema permitido, default `dbo`.
-- `DATA_FABRIC_ALLOWED_TABLE` (opcional): tabla permitida para consultas generadas.
-- `DATA_FABRIC_SCHEMA_HINT` (opcional): contexto adicional de tablas/columnas para mejorar SQL.
-- `DATA_FABRIC_MAX_ROWS` (opcional): límite de filas, default `100`.
-- `DATA_FABRIC_TIMEOUT_SECONDS` (opcional): timeout de consulta SQL, default `30`.
-
-Consulta `backend-proxy/README.md` para guía completa de despliegue, configuración y ejemplos.
+---
 
 ## Temas (Light/Dark)
 
-La app soporta tema claro y oscuro mediante Tailwind con estrategia por clase (`darkMode: 'class'`).
+- Toggle manual en el Top Bar.
+- Persistencia en `localStorage` (key `fibot-theme`).
+- Implementado con Tailwind `darkMode: 'class'`.
+- Transiciones suaves con soporte para `prefers-reduced-motion`.
 
-### Comportamiento
+---
 
-- Hay un **toggle manual** en el Top Bar.
-- El tema seleccionado se guarda en `localStorage` con la key `fibot-theme`.
-- En cada cambio de tema:
-	- Se agrega o quita la clase `dark` en `document.documentElement`.
-	- Se persiste la preferencia del usuario.
+## Renderizado de mensajes
 
-### Experiencia visual
+Los mensajes del asistente aceptan:
 
-- Transiciones suaves de color para el cambio de tema.
-- Respeto por accesibilidad con `prefers-reduced-motion: reduce`.
+- **Markdown** via `marked`: tablas, listas, código, negritas.
+- **HTML**: renderizado directo con sanitización DOMPurify.
+- **QuickChart**: bloques `mermaid` con datasets `"Label": [valores]` → imagen de gráfico de barras.
 
-## Iconografía de FiBot y agentes
-
-Se incorporó iconografía semántica en el área izquierda:
-
-- **FiBot**: ícono representativo en el encabezado del sidebar.
-- **Agentes IA**: ícono por modelo en cada tarjeta de selección.
-- **Acentos por proveedor**: OpenAI, Anthropic y Google con tonos sutiles para diferenciación visual.
+---
 
 ## Calidad y pruebas
 
-El proyecto incluye cobertura de flujos clave:
-
-- **Unit tests**:
-	- Visibilidad del estado superior.
-	- Flujo de envío de chat.
-	- Bloqueo de envío vacío.
-	- Estado de modelos en sidebar.
-	- Persistencia y toggle de tema.
-- **E2E tests**:
-	- Flujo smoke de envío de mensaje.
-	- Medición base de interacción/performance.
-
-Ejecución recomendada antes de subir cambios:
-
 ```bash
+# Ejecutar antes de subir cambios
 npm run lint
 npm run test
 npm run test:e2e
 npm run build
 ```
 
+### Cobertura actual
+
+**Unit tests (Vitest)**:
+- Visibilidad del estado superior
+- Flujo de envío de chat
+- Bloqueo de envío vacío
+- Estado de modelos en sidebar
+- Persistencia y toggle de tema
+
+**E2E tests (Playwright)**:
+- Flujo smoke de envío de mensaje
+- Medición base de interacción/performance
+
+---
+
 ## Buenas prácticas para contribuir
 
-- Mantener los textos de UI en español y consistentes.
-- Preferir cambios pequeños y enfocados.
-- Añadir o ajustar pruebas cuando se modifiquen flujos críticos.
-- Respetar tokens/utilidades de Tailwind ya existentes.
-- Evitar introducir estilos hardcodeados fuera del sistema actual.
-- No devolver HTML sin sanitizar con DOMPurify antes de insertar en el DOM.
+- Textos de UI en español, consistentes con el sistema actual.
+- Cambios pequeños y enfocados — un PR por feature o fix.
+- Añadir pruebas al modificar flujos críticos.
+- Usar tokens y utilidades Tailwind existentes; evitar estilos hardcodeados.
+- Nunca insertar HTML en el DOM sin pasar por `DOMPurify`.
+- Nunca commitear `.env`, `local.settings.json` ni credenciales.
+
+---
 
 ## Troubleshooting
 
-### 1) `npm install` falla
+### `npm install` falla
 
-- Verifica versión de Node.js.
-- Elimina `node_modules` y `package-lock.json`, luego reinstala:
+Verifica Node.js 20+. Elimina `node_modules` y `package-lock.json` y reinstala.
 
-	```bash
-	npm install
-	```
+### Las pruebas E2E fallan en entorno nuevo
 
-### 2) Las pruebas E2E fallan en entorno nuevo
+```bash
+npx playwright install
+```
 
-- Instala navegadores de Playwright:
+### El tema no cambia
 
-	```bash
-	npx playwright install
-	```
+- Verifica `fibot-theme` en `localStorage`.
+- Confirma `darkMode: 'class'` en `tailwind.config.js`.
 
-### 3) El tema no cambia
+### Los gráficos QuickChart no se muestran
 
-- Verifica que exista la key `fibot-theme` en `localStorage`.
-- Revisa que `darkMode: 'class'` esté definido en `tailwind.config.js`.
+- Verifica conectividad a `quickchart.io`.
+- La IA debe generar bloques `mermaid` con formato `"Label": [valores]`.
 
-### 4) Los gráficos QuickChart no se muestran
+### El proxy no conecta a Azure SQL
 
-- Verifica conectividad a `quickchart.io` desde el navegador.
-- Asegúrate de que la IA esté generando bloques `mermaid` con el formato esperado (`"Label": [valores]`).
+- Verifica las variables `DB_*` en la configuración del servidor (Application Settings en Azure, env vars en Lambda).
+- Confirma que la IP del servidor (o NAT Gateway en Lambda) esté en la whitelist del firewall de Azure SQL.
+- Para Lambda: se requiere VPC + NAT Gateway con Elastic IP fija; "Allow Azure services" no cubre AWS.
+- Revisa los logs en Application Insights (Azure) o CloudWatch (Lambda).
 
-### 5) El flujo Data Fabric falla
+### Guía completa del proxy
 
-- Verifica que `DATA_FABRIC_CONNECTION_STRING` o las variables de App Registration estén correctamente configuradas en Lambda.
-- Confirma que el Service Principal tenga permisos de acceso y lectura sobre el Warehouse en Microsoft Fabric.
-- Revisa los logs de CloudWatch para ver el error exacto de conexión o SQL.
+Ver [backend-proxy/README.md](backend-proxy/README.md) para documentación detallada de variables, modos de conexión, seguridad SQL y opciones de despliegue.
+
+---
+
+## Análisis del sistema
+
+### Performance
+
+| Dimensión | Estado actual | Impacto | Recomendación |
+|---|---|---|---|
+| Latencia total | 3–8 s (flujo SQL completo) | Alto | Mostrar streaming de tokens si el proveedor IA lo soporta |
+| Etapas IA en serie | 2 llamadas (SQL → respuesta) | Medio | Cachear `discoverSchemaHint` por sesión si el esquema no cambia |
+| Timeout SQL | 30 s (configurable) | Bajo | Ajustar a la complejidad real de las consultas; 30 s es conservador |
+| Filas al modelo | 100 (configurable) | Medio-alto | `DB_MAX_ROWS=50` reduce tokens y latencia de la segunda llamada IA |
+| Cold start serverless | 1–3 s adicionales | Medio | Plan Premium elimina cold starts en Azure Functions |
+| Tamaño del paquete | `mssql` ~15 MB | Bajo | Normal para Node.js; no impacta latencia de ejecución |
+
+### Arquitectura
+
+| Dimensión | Estado actual | Fortaleza / Riesgo |
+|---|---|---|
+| Dual-platform adapter | Un solo `dist/index.js` para Azure y Lambda | Fortaleza: reduce duplicación; riesgo: `require('@azure/functions')` con try/catch |
+| Separación de responsabilidades | `processRequest()` agnóstica a la plataforma | Fortaleza: testeable de forma aislada |
+| Conversational routing | La misma llamada IA clasifica Y genera SQL | Fortaleza: ahorra llamada extra; riesgo: el modelo puede malclasificar |
+| Schema discovery por request | `INFORMATION_SCHEMA.COLUMNS` en cada mensaje | Riesgo: consulta extra a la BD; mitigable con caché en memoria |
+| Retry on `Invalid object name` | Un reintento con redescubrimiento de esquema | Razonable; más reintentos aumentarían la latencia |
+| Stateless | Sin estado compartido entre requests | Fortaleza: escala horizontalmente sin coordinación |
+
+### Seguridad
+
+| Capa | Estado | Nivel |
+|---|---|---|
+| API key nunca expuesta al navegador | Proxy protege todas las credenciales | Excelente |
+| SQL injection | SELECT-only, DML blocklist, esquema explícito, whitelist de tablas | Excelente |
+| Comentarios SQL bloqueados | `--`, `/*`, `*/` rechazados | Excelente |
+| CORS | `ALLOWED_ORIGIN` configurable | Bueno — usar dominio exacto en producción, no `*` |
+| Usuario de BD | Recomendado: permisos solo SELECT sobre el esquema permitido | Pendiente validar en la BD |
+| Secretos en variables de entorno | No hardcodeados en código ni repositorio | Excelente |
+| `local.settings.json` en `.gitignore` | No se sube al repositorio | Excelente |
+| HTML sanitizado con DOMPurify | Previene XSS en respuestas del asistente | Excelente |
+| Rate limiting | No implementado en el proxy | Riesgo — agregar en Azure API Management o AWS API Gateway |
+
+### Observabilidad
+
+| Dimensión | Estado | Recomendación |
+|---|---|---|
+| Logs | `console.error` en catch blocks | Agregar Application Insights (Azure) o CloudWatch structured logs |
+| Trazabilidad | Sin request ID | Generar y propagar un `X-Request-Id` para correlacionar frontend y proxy |
+| Métricas por etapa | Sin instrumentación | Registrar duración de schema discovery, SQL gen, SQL exec y answer gen |
+| Alertas | Sin configurar | Crear alerta por error rate > 5% en Application Insights / CloudWatch |
+
+### Mantenibilidad
+
+| Dimensión | Estado | Observación |
+|---|---|---|
+| TypeScript strict | Habilitado | Reduce bugs en tiempo de compilación |
+| Tests del proxy | Ninguno | Vitest cubre solo el frontend; el proxy no tiene suite propia |
+| Scripts de packaging | PowerShell (.ps1) | Funciona en Windows; agregar equivalente bash para CI/CD en Linux |
+| Dependencias | `mssql 12`, `@azure/functions 4` | Mantener actualizados para recibir parches de seguridad |
+| Documentación | README por capa (raíz + backend-proxy) | Reduce fricción de onboarding |
+
+### Costos estimados (referencia)
+
+| Componente | Azure Functions (Consumption) | AWS Lambda |
+|---|---|---|
+| Invocaciones | 1 M gratis/mes, luego ~$0.20/M | 1 M gratis/mes, luego ~$0.20/M |
+| Duración | 400 000 GB-s gratis/mes | 400 000 GB-s gratis/mes |
+| Azure SQL | ~$5/mes (Basic 5 DTU) — $150+/mes (General Purpose) | misma BD, sin cambio |
+| IP fija | Incluida en Azure Functions (misma VNet) | NAT Gateway ~$32/mes fijos + datos |
+| **Ventaja** | Sin NAT Gateway, latencia BD menor (misma región) | Mayor flexibilidad de proveedor |
