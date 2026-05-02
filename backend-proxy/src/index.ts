@@ -97,6 +97,51 @@ type SchemaRow = {
   DATA_TYPE: string
 }
 
+// ─── conversational memory (simple in-memory) ───────────────────────────────
+
+type ConversationMemory = {
+  lastQuery?: string
+  lastPeriod?: string
+  lastResult?: QueryRow[]
+}
+
+const memoryStore = new Map<string, ConversationMemory>()
+
+function getSessionId(messages: Array<{ role: ChatRole; content: string }>) {
+  // puedes mejorar esto con userId real
+  return 'default-session'
+}
+
+function getMemory(sessionId: string): ConversationMemory {
+  if (!memoryStore.has(sessionId)) {
+    memoryStore.set(sessionId, {})
+  }
+  return memoryStore.get(sessionId)!
+}
+
+// ─── simple cache ───────────────────────────────────────────────────────────
+
+const queryCache = new Map<string, QueryRow[]>()
+const queryCacheTimestamps = new Map<string, number>()
+const CACHE_TTL_MS = 5 * 60 * 1000
+
+function getCacheKey(query: string) {
+  return query.toLowerCase().trim()
+}
+
+function detectKPIs(question: string) {
+  const q = question.toLowerCase()
+
+  return {
+    needsMargin: q.includes('margen'),
+    needsEbitda: q.includes('ebitda'),
+    needsComparison:
+      q.includes('comparar') ||
+      q.includes('vs') ||
+      q.includes('mes pasado'),
+  }
+}
+
 const DANGEROUS_SQL_KEYWORDS = [
   /\binsert\b/i,
   /\bupdate\b/i,
@@ -111,6 +156,28 @@ const DANGEROUS_SQL_KEYWORDS = [
   /\bexec\b/i,
   /\bexecute\b/i,
 ]
+
+function extractPeriod(text: string): string | undefined {
+  const match = /\b(\d{4}-(?:0[1-9]|1[0-2]))\b/.exec(text)
+  return match?.[1]
+}
+
+function enrichQuestionWithMemory(
+  question: string,
+  memory: ConversationMemory,
+) {
+  let enriched = question
+
+  if (question.toLowerCase().includes('mes pasado') && memory.lastPeriod) {
+    enriched += ` (usar periodo anterior a ${memory.lastPeriod})`
+  }
+
+  if (question.toLowerCase().includes('compáralo') && memory.lastQuery) {
+    enriched += ` (comparar con: ${memory.lastQuery})`
+  }
+
+  return enriched
+}
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -599,7 +666,25 @@ async function executeSqlQuery(config: ProxyConfig, sqlQuery: string) {
     await pool.close()
   }
 }
+async function executeSqlQueryCached(
+  config: ProxyConfig,
+  sqlQuery: string,
+): Promise<{ rows: QueryRow[]; fromCache: boolean }> {
+  const key = getCacheKey(sqlQuery)
+  const cachedTs = queryCacheTimestamps.get(key)
 
+  if (cachedTs !== undefined && Date.now() - cachedTs <= CACHE_TTL_MS) {
+    return { rows: queryCache.get(key)!, fromCache: true }
+  }
+
+  queryCache.delete(key)
+  queryCacheTimestamps.delete(key)
+
+  const rows = await executeSqlQuery(config, sqlQuery)
+  queryCache.set(key, rows)
+  queryCacheTimestamps.set(key, Date.now())
+  return { rows, fromCache: false }
+}
 // ─── SQL generation ──────────────────────────────────────────────────────────
 
 function getLastUserQuestion(messages: Array<{ role: ChatRole; content: string }>) {
@@ -642,66 +727,92 @@ async function generateSqlOrRoute(
   const schema = config.dbAllowedSchema
   const tablesSection = buildAllowedTablesSection(schema, config.dbAllowedTables)
 
-  const systemPrompt = [
-    // ── ROL ──
-    `Eres un asistente experto en SQL T-SQL para SQL Server.
-Tu función principal es convertir preguntas de negocio sobre datos financieros en consultas SQL de solo lectura.
+ 
+const systemPrompt = [
+  // ── ROL ──
+  `Eres un asistente experto en SQL T-SQL para SQL Server.
 
-CASO ESPECIAL — RESPUESTA CONVERSACIONAL:
-Si la pregunta es un saludo, agradecimiento, pregunta sobre tus capacidades, o cualquier consulta que NO requiera datos de la base de datos, responde ÚNICAMENTE con la palabra:
-CONVERSATIONAL
-(sin explicaciones, sin SQL, solo esa palabra)`,
+Tu única función es:
+1. Determinar si la pregunta del usuario requiere consultar datos
+2. Si SÍ → generar una consulta SQL válida
+3. Si NO → responder EXACTAMENTE: CONVERSATIONAL`,
 
-    // ── RESTRICCIONES ──
-    `RESTRICCIONES ABSOLUTAS (cuando generes SQL):
-- Solo sentencias SELECT o WITH ... SELECT.
-- Prohibido: INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, MERGE, EXEC, EXECUTE.
-- Prohibido generar múltiples sentencias separadas por punto y coma.
-- Solo tablas/vistas del esquema [${schema}] con esquema explícito siempre.
-- Si la pregunta no puede responderse con datos disponibles, responde: CONVERSATIONAL`,
+  // ── CLASIFICACIÓN ──
+  `CLASIFICACIÓN DE INTENCIÓN:
 
-    // ── TABLAS PERMITIDAS ──
-    `TABLAS Y VISTAS PERMITIDAS (esquema [${schema}]):
+Responde EXACTAMENTE "CONVERSATIONAL" si:
+- Es un saludo (hola, buenos días, etc.)
+- Es conversación general
+- Preguntan qué puedes hacer
+- Agradecimientos
+- La pregunta es ambigua o incompleta (ej: "¿cómo voy?")
+- No hay suficiente contexto para generar SQL correcto
+- No se puede responder con los datos disponibles
+
+En cualquier otro caso → genera SQL.`,
+
+  // ── RESTRICCIONES ──
+  `RESTRICCIONES ABSOLUTAS (SQL):
+- SOLO SELECT o WITH ... SELECT
+- PROHIBIDO:
+  INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, MERGE, EXEC, EXECUTE
+- NO múltiples queries
+- NO punto y coma al final
+- NO markdown
+- NO explicaciones
+- Si no puedes construir un SQL correcto → responde CONVERSATIONAL`,
+
+  // ── ESQUEMA ──
+  `TABLAS Y VISTAS PERMITIDAS (esquema [${schema}]):
 ${tablesSection}
 
 REGLAS DE USO:
-- Siempre califica con esquema. Ejemplo: FROM [${schema}].[nombre_tabla]
-- Puedes hacer JOINs entre tablas del mismo esquema.
-- Usa las vistas analíticas cuando estén disponibles (empiezan con vw_).
-- Nunca uses referencias sin esquema explícito.`,
+- SIEMPRE usar esquema explícito: [${schema}].[tabla]
+- Puedes hacer JOINs entre tablas
+- Prioriza vistas analíticas (vw_)
+- NUNCA usar tablas fuera del esquema
+- NUNCA omitir el esquema`,
 
-    // ── FORMATO ──
-    `FORMATO DE SALIDA (cuando generes SQL):
-- Devuelve ÚNICAMENTE el SQL, sin explicaciones, sin markdown, sin bloques de código.
-- No incluyas comentarios (--) ni texto fuera del SQL.
-- No uses punto y coma al final.`,
+  // ── FORMATO ──
+  `FORMATO DE SALIDA:
+- Devuelve ÚNICAMENTE el SQL
+- Sin texto adicional
+- Sin comentarios (--)
+- Sin bloques de código`,
 
-    // ── REGLAS T-SQL ──
-    `BUENAS PRÁCTICAS T-SQL:
-- Usa TOP (N) para limitar resultados cuando no se pida un total.
-- Para filtrar por periodo usa el campo "periodo" (formato: '2025-01').
-- Para filtrar por año usa "anio" o "ejercicio" según la tabla.
-- Para comparar ejecutado vs presupuesto: une la tabla de hechos real con la de presupuesto por empresa_id, periodo y cuenta_id.
-- Usa SUM() para agregar valores monetarios; GROUP BY para desglosar por categoría o periodo.
-- Usa alias descriptivos en español para columnas calculadas.`,
+  // ── BUENAS PRÁCTICAS ──
+  `BUENAS PRÁCTICAS T-SQL:
+- Usa TOP (N) si no piden dataset completo
+- Usa SUM() para valores monetarios
+- Usa GROUP BY cuando agregues datos
+- Usa alias descriptivos en español
 
-    // ── ESQUEMA DESCUBIERTO ──
-    schemaHint
-      ? `ESQUEMA DETALLADO DE COLUMNAS (descubierto automáticamente):\n${schemaHint}`
-      : '',
+FILTROS:
+- Periodo → campo "periodo" (formato: 'YYYY-MM')
+- Año → "anio" o "ejercicio"
 
-    // ── CONTEXTO ADICIONAL DEL NEGOCIO ──
-    config.dbSchemaHint
-      ? `CONTEXTO DE NEGOCIO (proporcionado por el administrador):\n${config.dbSchemaHint}`
-      : '',
+ANÁLISIS:
+- Para ejecutado vs presupuesto → unir por:
+  empresa_id, periodo, cuenta_id`,
 
-    // ── ERROR ANTERIOR ──
-    previousError
-      ? `AVISO — ERROR EN CONSULTA ANTERIOR (evita repetir este patrón):\n${previousError}`
-      : '',
-  ]
-    .filter(Boolean)
-    .join('\n\n')
+  // ── ESQUEMA DETALLADO ──
+  schemaHint
+    ? `ESQUEMA DETALLADO DE COLUMNAS:\n${schemaHint}`
+    : '',
+
+  // ── CONTEXTO NEGOCIO ──
+  config.dbSchemaHint
+    ? `CONTEXTO DE NEGOCIO:\n${config.dbSchemaHint}`
+    : '',
+
+  // ── ERROR ANTERIOR ──
+  previousError
+    ? `ERROR ANTERIOR (NO repetir):\n${previousError}`
+    : '',
+]
+  .filter(Boolean)
+  .join('\n\n')
+
 
   const raw = await completeWithAI(
     config,
@@ -893,7 +1004,7 @@ function buildAnswerUserPrompt(question: string, sqlQuery: string, rowsSummary: 
   ].join('\n\n')
 }
 
-async function answerWithData(
+/*async function answerWithData(
   config: ProxyConfig,
   question: string,
   sqlQuery: string,
@@ -908,8 +1019,59 @@ async function answerWithData(
     ],
     config.answerModel,
   )
-}
+}*/
 
+async function answerWithDataEnhanced(
+  config: ProxyConfig,
+  question: string,
+  sqlQuery: string,
+  rows: QueryRow[],
+  language: Language,
+) {
+  const kpis = detectKPIs(question)
+
+  const dashboardPrompt = `
+Eres un analista financiero senior.
+
+Genera una respuesta tipo DASHBOARD EJECUTIVO:
+
+SECCIONES:
+1. Resumen ejecutivo (insight clave)
+2. Métricas principales
+3. Análisis (qué significa)
+4. Recomendación accionable
+
+FORMATO:
+- HTML limpio
+- Usar <strong> para títulos
+- Tablas para métricas
+- Insights claros (no genéricos)
+
+KPIs:
+${JSON.stringify(kpis)}
+
+`
+
+  return completeWithAI(
+    config,
+    [
+      { role: 'system', content: dashboardPrompt },
+      {
+        role: 'user',
+        content: `
+Pregunta: ${question}
+
+SQL:
+${sqlQuery}
+
+Datos:
+${JSON.stringify(rows)}
+`,
+      },
+    ],
+    config.answerModel,
+  )
+}
 // ─── flow handlers ───────────────────────────────────────────────────────────
 
 function injectLanguageHint(
@@ -944,7 +1106,7 @@ async function handleConversationalResponse(
   return { message }
 }
 
-async function handleDbAgentFlow(
+/*async function handleDbAgentFlow(
   config: ProxyConfig,
   messages: Array<{ role: ChatRole; content: string }>,
   language: Language,
@@ -992,6 +1154,59 @@ async function handleDbAgentFlow(
   return {
     message,
     meta: { sql: sqlQuery, rows: rows.length, source: 'sql-db' },
+  }
+}*/
+
+async function handleDbAgentFlow(
+  config: ProxyConfig,
+  messages: Array<{ role: ChatRole; content: string }>,
+  language: Language,
+) {
+  const sessionId = getSessionId(messages)
+  const memory = getMemory(sessionId)
+
+  let question = getLastUserQuestion(messages)
+  question = enrichQuestionWithMemory(question, memory)
+
+  const discoveredSchemaHint = await discoverSchemaHint(config)
+  let route = await generateSqlOrRoute(config, question, discoveredSchemaHint)
+
+  if (route.type === 'conversational') {
+    return handleConversationalResponse(config, messages, language)
+  }
+
+  let sqlQuery = route.query
+  let rows: QueryRow[]
+  let fromCache: boolean
+
+  try {
+    ;({ rows, fromCache } = await executeSqlQueryCached(config, sqlQuery))
+  } catch (error) {
+    const firstError = error instanceof Error ? error.message : 'Error desconocido al ejecutar SQL.'
+
+    if (!isInvalidObjectNameError(firstError)) throw error
+
+    const retryHint = await discoverSchemaHint(config)
+    const retryRoute = await generateSqlOrRoute(config, question, retryHint, firstError)
+
+    if (retryRoute.type === 'conversational') {
+      return handleConversationalResponse(config, messages, language)
+    }
+
+    sqlQuery = retryRoute.query
+    ;({ rows, fromCache } = await executeSqlQueryCached(config, sqlQuery))
+  }
+
+  memory.lastQuery = question
+  memory.lastResult = rows
+  const detectedPeriod = extractPeriod(question)
+  if (detectedPeriod) memory.lastPeriod = detectedPeriod
+
+  const message = await answerWithDataEnhanced(config, question, sqlQuery, rows, language)
+
+  return {
+    message,
+    meta: { sql: sqlQuery, rows: rows.length, cached: fromCache },
   }
 }
 
