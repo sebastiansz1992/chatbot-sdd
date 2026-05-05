@@ -1029,45 +1029,33 @@ async function answerWithDataEnhanced(
   language: Language,
 ) {
   const kpis = detectKPIs(question)
+  const isEN = language === 'en'
 
-  const dashboardPrompt = `
-Eres un analista financiero senior.
+  const dashboardBlock = isEN
+    ? `DASHBOARD FORMAT (apply to this response):
+Structure your answer as an executive dashboard with:
+1. Executive Summary (key insight in 1-2 sentences)
+2. Key Metrics (table format)
+3. Analysis (what the numbers mean in context)
+4. Actionable Recommendation
 
-Genera una respuesta tipo DASHBOARD EJECUTIVO:
-
-SECCIONES:
-1. Resumen ejecutivo (insight clave)
-2. Métricas principales
-3. Análisis (qué significa)
+KPIs detected: ${JSON.stringify(kpis)}`
+    : `FORMATO DASHBOARD (aplica a esta respuesta):
+Estructura tu respuesta como un dashboard ejecutivo con:
+1. Resumen ejecutivo (insight clave en 1-2 oraciones)
+2. Métricas principales (formato tabla)
+3. Análisis (qué significan los números en contexto)
 4. Recomendación accionable
 
-FORMATO:
-- HTML limpio
-- Usar <strong> para títulos
-- Tablas para métricas
-- Insights claros (no genéricos)
+KPIs detectados: ${JSON.stringify(kpis)}`
 
-KPIs:
-${JSON.stringify(kpis)}
-
-`
+  const systemPrompt = [buildAnswerSystemPrompt(language), dashboardBlock].join('\n\n---\n\n')
 
   return completeWithAI(
     config,
     [
-      { role: 'system', content: dashboardPrompt },
-      {
-        role: 'user',
-        content: `
-Pregunta: ${question}
-
-SQL:
-${sqlQuery}
-
-Datos:
-${JSON.stringify(rows)}
-`,
-      },
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: buildAnswerUserPrompt(question, sqlQuery, summarizeRows(rows)) },
     ],
     config.answerModel,
   )
