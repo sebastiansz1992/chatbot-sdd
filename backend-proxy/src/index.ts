@@ -977,18 +977,52 @@ No uses conocimiento externo más allá de lo que muestran los datos. Si los dat
 - Para valores clave únicos → <p><strong>Etiqueta:</strong> valor</p>.`
 
   const chartBlock = isEN
-    ? `CHART RULES (only when explicitly requested by the user):
-- Use QuickChart (quickchart.io) only. Allowed types: bar, pie, line.
-- Include exactly ONE <img> tag with src from quickchart.io.
-- Style: style="width:80%; max-width:500px;"
-- Always include the datalabels plugin to show values on each bar/segment.
-- URL-encode the config. No backticks or markdown.`
-    : `REGLAS DE GRÁFICOS (solo cuando el usuario lo solicite explícitamente):
-- Usa únicamente QuickChart (quickchart.io). Tipos: bar, pie, line.
-- Incluye exactamente UNA etiqueta <img> con src de quickchart.io.
-- Estilo: style="width:80%; max-width:500px;"
-- Siempre incluye el plugin datalabels para mostrar valores en cada barra/segmento.
-- Codifica la URL del config. Sin backticks ni markdown.`
+    ? `CHART RULES (apply when the user asks for a chart, graph, or visualization):
+
+CRITICAL: You CAN generate charts. QuickChart is a URL-based service — you build a URL and it returns a chart image. No image file generation needed. NEVER say you cannot generate charts.
+
+HOW IT WORKS:
+1. Build a Chart.js JSON config object with the data.
+2. URL-encode the entire JSON (encodeURIComponent style: spaces → %20, quotes → %22, etc.).
+3. Embed it in: <img src="https://quickchart.io/chart?c=URL_ENCODED_CONFIG" style="width:80%;max-width:500px;">
+
+ALLOWED TYPES: bar, pie, line
+ALWAYS include the datalabels plugin to show values on each segment/bar.
+
+EXAMPLE (bar chart — adapt labels and data to the actual query results):
+Config before encoding:
+{"type":"bar","data":{"labels":["Jan","Feb","Mar"],"datasets":[{"label":"Revenue","data":[120000,115000,135000],"backgroundColor":"rgba(54,162,235,0.7)"}]},"options":{"plugins":{"datalabels":{"anchor":"end","align":"top","color":"#333"}}}}
+
+Final tag:
+<img src="https://quickchart.io/chart?c=%7B%22type%22%3A%22bar%22%2C%22data%22%3A%7B%22labels%22%3A%5B%22Jan%22%2C%22Feb%22%2C%22Mar%22%5D%2C%22datasets%22%3A%5B%7B%22label%22%3A%22Revenue%22%2C%22data%22%3A%5B120000%2C115000%2C135000%5D%7D%5D%7D%7D" style="width:80%;max-width:500px;">
+
+RULES:
+- ONE <img> tag per response.
+- Use REAL data from the query results — never invent numbers.
+- No markdown, no backticks, no code blocks around the tag.`
+    : `REGLAS DE GRÁFICOS (aplica cuando el usuario pida una gráfica, gráfico o visualización):
+
+IMPORTANTE: SÍ PUEDES generar gráficos. QuickChart es un servicio basado en URL — construyes una URL y el servicio devuelve la imagen del gráfico. No se genera ningún archivo de imagen. NUNCA digas que no puedes generar gráficos.
+
+CÓMO FUNCIONA:
+1. Construye un objeto JSON de configuración Chart.js con los datos reales.
+2. URL-encoda el JSON completo (estilo encodeURIComponent: espacios → %20, comillas → %22, etc.).
+3. Incrústalo en: <img src="https://quickchart.io/chart?c=CONFIG_URL_ENCODED" style="width:80%;max-width:500px;">
+
+TIPOS PERMITIDOS: bar, pie, line
+SIEMPRE incluye el plugin datalabels para mostrar los valores en cada barra/segmento.
+
+EJEMPLO (gráfico de barras — adapta etiquetas y datos a los resultados reales de la consulta):
+Config antes de encodear:
+{"type":"bar","data":{"labels":["Ene","Feb","Mar"],"datasets":[{"label":"Ingresos","data":[120000,115000,135000],"backgroundColor":"rgba(54,162,235,0.7)"}]},"options":{"plugins":{"datalabels":{"anchor":"end","align":"top","color":"#333"}}}}
+
+Etiqueta final:
+<img src="https://quickchart.io/chart?c=%7B%22type%22%3A%22bar%22%2C%22data%22%3A%7B%22labels%22%3A%5B%22Ene%22%2C%22Feb%22%2C%22Mar%22%5D%2C%22datasets%22%3A%5B%7B%22label%22%3A%22Ingresos%22%2C%22data%22%3A%5B120000%2C115000%2C135000%5D%7D%5D%7D%7D" style="width:80%;max-width:500px;">
+
+REGLAS:
+- UNA sola etiqueta <img> por respuesta.
+- Usa los datos REALES de los resultados de la consulta — nunca inventes números.
+- Sin markdown, sin backticks, sin bloques de código alrededor de la etiqueta.`
 
   return [roleBlock, ebitdaBlock, formatBlock, chartBlock, buildLanguageInstruction(language)]
     .filter(Boolean)
