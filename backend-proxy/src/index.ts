@@ -788,12 +788,24 @@ REGLAS DE USO:
 - Usa alias descriptivos en español
 
 FILTROS:
-- Periodo → campo "periodo" (formato: 'YYYY-MM')
-- Año → "anio" o "ejercicio"
+- Periodo → campo "periodo" (formato: 'YYYY-MM' como texto)
+- Si no se menciona año → usar el año actual: CAST(YEAR(GETDATE()) AS VARCHAR(4))
+- Trimestres sobre campo periodo tipo 'YYYY-MM':
+    Q1 → RIGHT(periodo,2) IN ('01','02','03')
+    Q2 → RIGHT(periodo,2) IN ('04','05','06')
+    Q3 → RIGHT(periodo,2) IN ('07','08','09')
+    Q4 → RIGHT(periodo,2) IN ('10','11','12')
+  Combinar con año: LEFT(periodo,4) = CAST(YEAR(GETDATE()) AS VARCHAR(4))
+  Ejemplo Q1 año actual: WHERE LEFT(periodo,4) = CAST(YEAR(GETDATE()) AS VARCHAR(4)) AND RIGHT(periodo,2) IN ('01','02','03')
+- Año → campo "anio" o "ejercicio" (si existe); si no, usar LEFT(periodo,4)
 
 ANÁLISIS:
 - Para ejecutado vs presupuesto → unir por:
-  empresa_id, periodo, cuenta_id`,
+  empresa_id, periodo, cuenta_id
+
+CURVA S (acumulado progresivo — usar cuando pidan "curva s", "acumulado", "avance acumulado"):
+- Requiere SUM() OVER (ORDER BY periodo ROWS UNBOUNDED PRECEDING) para cada métrica
+- Para gráfico → tipo line con dos datasets (acumulado real vs acumulado presupuesto)`,
 
   // ── ESQUEMA DETALLADO ──
   schemaHint
