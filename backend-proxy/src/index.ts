@@ -433,6 +433,7 @@ function resolveDbPoolConfig(config: ProxyConfig): string | sql.config {
       user: config.dbUser,
       password: config.dbPassword,
       options: { encrypt: true, trustServerCertificate: false },
+      connectionTimeout: config.dbTimeoutMs
     }
   }
 
@@ -441,6 +442,7 @@ function resolveDbPoolConfig(config: ProxyConfig): string | sql.config {
       server: normalizeDbServer(config.dbServer),
       database: config.dbDatabase,
       port: 1433,
+      connectionTimeout: config.dbTimeoutMs,
       options: { encrypt: true, trustServerCertificate: false },
       authentication: {
         type: 'azure-active-directory-service-principal-secret',
