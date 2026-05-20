@@ -352,7 +352,12 @@ function buildHeaders(provider: Provider, authHeader: string, apiKey: string) {
     headers[authHeader] = apiKey
     return headers
   }
-  headers[authHeader] = apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`
+  // 'api-key' header (Azure OpenAI key-based auth) expects the raw key without Bearer prefix
+  if (authHeader.toLowerCase() === 'api-key') {
+    headers[authHeader] = apiKey
+  } else {
+    headers[authHeader] = apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`
+  }
   return headers
 }
 
