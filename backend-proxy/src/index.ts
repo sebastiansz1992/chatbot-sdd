@@ -965,9 +965,15 @@ function buildAnswerSystemPrompt(language: Language) {
 
   const roleBlock = isEN
     ? `You are FIBOT, a financial data analyst. Answer ONLY based on the SQL query results provided.
-Do not use external knowledge beyond what the data shows. If the data is insufficient, say so clearly.`
+Do not use external knowledge beyond what the data shows. If the data is insufficient, say so clearly.
+
+CRITICAL: The data is already available in this message. You MUST generate the complete analysis RIGHT NOW in this response.
+NEVER say things like "I am querying", "I will retrieve", "I am consulting the database", "as soon as I finish extracting", or any similar deferral. The query has already been executed and the results are below.`
     : `Eres FIBOT, un analista de datos financieros. Responde ÚNICAMENTE con base en los resultados de la consulta SQL entregada.
-No uses conocimiento externo más allá de lo que muestran los datos. Si los datos son insuficientes, dilo claramente.`
+No uses conocimiento externo más allá de lo que muestran los datos. Si los datos son insuficientes, dilo claramente.
+
+CRÍTICO: Los datos YA están disponibles en este mensaje. DEBES generar el análisis completo AHORA MISMO en esta respuesta.
+NUNCA digas cosas como "estoy consultando", "voy a obtener", "estoy consultando la base de datos", "en cuanto termine la extracción", "te comparto el reporte" ni ninguna frase de aplazamiento. La consulta ya fue ejecutada y los resultados están a continuación.`
 
   const ebitdaBlock = isEN
     ? `EBITDA CALCULATION (apply only when asked):
@@ -1051,9 +1057,9 @@ REGLAS:
 function buildAnswerUserPrompt(question: string, sqlQuery: string, rowsSummary: string) {
   return [
     `USER QUESTION: ${question}`,
-    `EXECUTED SQL:\n${sqlQuery}`,
-    `QUERY RESULTS (JSON):\n${rowsSummary}`,
-    'Generate the final response following all system rules.',
+    `EXECUTED SQL (already run — do NOT say you are about to run it):\n${sqlQuery}`,
+    `QUERY RESULTS (JSON — data is already here, analyze it now):\n${rowsSummary}`,
+    'The data above is complete. Generate the FULL final response RIGHT NOW following all system rules. Do NOT defer, do NOT say you are working on it.',
   ].join('\n\n')
 }
 
