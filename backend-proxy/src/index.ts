@@ -511,6 +511,17 @@ function extractTableReferences(sqlQuery: string) {
   return references
 }
 
+function extractCteNames(sqlQuery: string): Set<string> {
+  const names = new Set<string>()
+  const regex = /(?:\bwith\b|,)\s+([a-z0-9_[\]"`]+)\s+as\s*\(/gi
+  let match = regex.exec(sqlQuery)
+  while (match) {
+    names.add(normalizeSqlIdentifier(match[1]))
+    match = regex.exec(sqlQuery)
+  }
+  return names
+}
+
 function validateAllowedTableUsage(
   sqlQuery: string,
   allowedSchema: string,
@@ -522,8 +533,11 @@ function validateAllowedTableUsage(
     throw new Error('DB_ALLOWED_SCHEMA está vacío o inválido.')
   }
 
+  const cteNames = extractCteNames(sqlQuery)
   const allowedSet = new Set(allowedTables.map((t) => resolveBaseTableName(t)))
-  const references = extractTableReferences(sqlQuery)
+  const references = extractTableReferences(sqlQuery).filter(
+    (ref) => !cteNames.has(normalizeSqlIdentifier(ref)),
+  )
 
   if (!references.length) {
     throw new Error('La consulta debe incluir FROM/JOIN con esquema explícito.')
