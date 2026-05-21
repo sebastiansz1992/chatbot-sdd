@@ -907,3 +907,25 @@ export async function handler(event: LambdaEvent): Promise<LambdaResult> {
     return jsonResponse(400, { error: safeMessage }, allowedOrigin)
   }
 }
+
+// Azure Functions v4 registration (only active when @azure/functions is available at runtime)
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const azureFunctions = require('@azure/functions') as typeof import('@azure/functions')
+  azureFunctions.app.http('chat', {
+    methods: ['POST', 'OPTIONS'],
+    authLevel: 'anonymous',
+    route: 'chat',
+    handler: async (req: import('@azure/functions').HttpRequest) => {
+      const body = req.method === 'POST' ? await req.text() : null
+      const result = await handler({ httpMethod: req.method, body })
+      return {
+        status: result.statusCode,
+        headers: result.headers,
+        body: result.body,
+      }
+    },
+  })
+} catch {
+  // Not running in Azure Functions environment – Lambda handler remains active
+}
