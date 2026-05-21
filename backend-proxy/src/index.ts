@@ -692,9 +692,19 @@ async function executeSqlQuery(config: ProxyConfig, sqlQuery: string) {
   }
 }
 
+const MAX_ROWS_JSON_CHARS = 8000
+
 function summarizeRows(rows: QueryRow[]) {
   if (!rows.length) return '[]'
-  return JSON.stringify(rows)
+  const full = JSON.stringify(rows)
+  if (full.length <= MAX_ROWS_JSON_CHARS) return full
+  for (let n = rows.length - 1; n > 0; n--) {
+    const truncated = JSON.stringify(rows.slice(0, n))
+    if (truncated.length <= MAX_ROWS_JSON_CHARS) {
+      return truncated + `\n/* Truncado: se muestran ${n} de ${rows.length} filas */`
+    }
+  }
+  return JSON.stringify(rows.slice(0, 1))
 }
 
 function resolveLanguage(value: unknown): Language {
@@ -845,12 +855,15 @@ async function handleDataFabricAgentFlow(
 
 async function getUpstreamErrorDetail(response: Response) {
   try {
-    const payload = (await response.json()) as UpstreamErrorPayload
+    const rawText = await response.text()
+    console.error('[FIBOT UPSTREAM ERROR]', response.status, rawText)
+    const payload = JSON.parse(rawText) as UpstreamErrorPayload
     const message = payload.error?.message?.trim()
     const status = payload.error?.status?.trim()
 
     if (message && status) return `${status}: ${message}`
     if (message) return message
+    if (rawText && rawText.length < 600) return `HTTP ${response.status}: ${rawText}`
   } catch {
     // Fallback to generic status below.
   }
