@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "build:proxy": "tsc -p backend-proxy/tsconfig.json",
     "package:proxy": "powershell -ExecutionPolicy Bypass -File backend-proxy/package-lambda.ps1",
-    "package:azure": "powershell -ExecutionPolicy Bypass -File backend-proxy/package-azure-function.ps1",
+    "package:azure": "powershell -ExecutionPolicy Bypass -File backend-proxy/package-azure.ps1",
+    "deploy:azure": "powershell -ExecutionPolicy Bypass -File backend-proxy/deploy-azure.ps1",
     "lint": "eslint .",
     "format": "prettier --write .",
     "test": "vitest run",
@@ -25,6 +26,7 @@
     "react-icons": "^5.5.0"
   },
   "devDependencies": {
+    "@azure/functions": "^4.15.0",
     "@eslint/js": "^9.39.1",
     "@playwright/test": "^1.58.2",
     "@testing-library/jest-dom": "^6.9.1",

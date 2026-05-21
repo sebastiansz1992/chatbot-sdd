@@ -872,9 +872,19 @@ function resolveModel(inputModel: unknown, defaultModel: string) {
   return defaultModel
 }
 
+const MAX_ROWS_JSON_CHARS = 8000
+
 function summarizeRows(rows: QueryRow[]) {
   if (!rows.length) return '[]'
-  return JSON.stringify(rows)
+  const full = JSON.stringify(rows)
+  if (full.length <= MAX_ROWS_JSON_CHARS) return full
+  for (let n = rows.length - 1; n > 0; n--) {
+    const truncated = JSON.stringify(rows.slice(0, n))
+    if (truncated.length <= MAX_ROWS_JSON_CHARS) {
+      return truncated + `\n/* Truncado: se muestran ${n} de ${rows.length} filas */`
+    }
+  }
+  return JSON.stringify(rows.slice(0, 1))
 }
 
 // ─── conversational prompt ───────────────────────────────────────────────────
