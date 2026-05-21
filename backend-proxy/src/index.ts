@@ -515,7 +515,12 @@ function buildHeaders(provider: Provider, authHeader: string, apiKey: string) {
     return headers
   }
 
-  headers[authHeader] = apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`
+  // Azure OpenAI usa el header 'api-key' con el valor crudo; otros usan Bearer token
+  if (authHeader.toLowerCase() === 'api-key') {
+    headers[authHeader] = apiKey
+  } else {
+    headers[authHeader] = apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`
+  }
   return headers
 }
 
